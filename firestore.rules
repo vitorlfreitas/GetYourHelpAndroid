@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function taskExists(taskId) {
+      return exists(/databases/$(database)/documents/tasks/$(taskId));
+    }
+
+    function taskOwner(taskId) {
+      return signedIn() && taskExists(taskId) &&
+        get(/databases/$(database)/documents/tasks/$(taskId)).data.ownerId == request.auth.uid;
+    }
+
+    function taskHelper(taskId) {
+      return signedIn() && taskExists(taskId) &&
+        get(/databases/$(database)/documents/tasks/$(taskId)).data.assignedHelperId == request.auth.uid;
+    }
+
+    match /users/{uid} {
+      allow create, read, update: if signedIn() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    match /tasks/{taskId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == 'OPEN';
+      allow update: if signedIn() && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if signedIn() && resource.data.ownerId == request.auth.uid
+        && resource.data.status == 'OPEN';
+    }
+
+    match /applications/{applicationId} {
+      allow read: if signedIn() && (
+        resource.data.helperId == request.auth.uid || taskOwner(resource.data.taskId)
+      );
+      allow create: if signedIn()
+        && request.resource.data.helperId == request.auth.uid
+        && taskExists(request.resource.data.taskId)
+        && get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.ownerId != request.auth.uid
+        && get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.status == 'OPEN'
+        && request.resource.data.status == 'PENDING';
+      allow update: if signedIn() && (
+        taskOwner(resource.data.taskId) ||
+        (resource.data.helperId == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+          request.resource.data.status == 'WITHDRAWN')
+      );
+      allow delete: if false;
+    }
+
+    match /paymentRecords/{recordId} {
+      allow read: if signedIn() &&
+        (resource.data.payerId == request.auth.uid || resource.data.payeeId == request.auth.uid);
+      allow create: if signedIn() &&
+        (request.resource.data.payerId == request.auth.uid || request.resource.data.payeeId == request.auth.uid)
+        && taskExists(request.resource.data.taskId);
+      allow update: if signedIn() &&
+        (resource.data.payerId == request.auth.uid || resource.data.payeeId == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /reports/{reportId} {
+      allow create: if signedIn() && request.resource.data.reporterId == request.auth.uid
+        && taskExists(request.resource.data.taskId);
+      allow read: if signedIn() && resource.data.reporterId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.reviewerId == request.auth.uid
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && taskExists(request.resource.data.taskId)
+        && get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.status == 'COMPLETED'
+        && request.auth.uid in [
+          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.ownerId,
+          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.assignedHelperId
+        ]
+        && request.resource.data.revieweeId in [
+          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.ownerId,
+          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.assignedHelperId
+        ]
+        && request.resource.data.revieweeId != request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}
