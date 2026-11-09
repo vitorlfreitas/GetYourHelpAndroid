@@ -1,8 +1,11 @@
 # GetYourHelp
 
-BSCH-MD: _Developing an Android App_
+BSCH-MD: **Developing an Android App**
+
 Student Name: Vitor Freitas
+
 Student Number: 3152612
+
 
 ## About
 
@@ -69,7 +72,7 @@ Open the project folder in Android Studio and let Gradle sync. Install any SDK c
 
 ### 2. Connect Firebase
 
-The app switches to Firebase automatically when `app/google-services.json` exists. Without it, the app runs in demo mode (see below).
+The app needs `app/google-services.json` to build. The file is git-ignored, so every clone needs its own copy.
 
 1. Create a project in the [Firebase Console](https://console.firebase.google.com/).
 2. Add an Android app with the package name `com.vitorfreitas.getyourhelp`.
@@ -149,7 +152,7 @@ GetYourHelpAndroid/
 | `MainActivity.kt`               | Entry point and all Compose screens: login, browse, create, my tasks, wallet, profile, and the task detail, report and review dialogs |
 | `AppViewModel.kt`               | Holds the UI state (`MarketplaceState`) and exposes the actions the screens call                                                      |
 | `data/Models.kt`                | Data classes: `AppUser`, `TaskItem`, `TaskApplication`, `PaymentRecord`, `TaskReport`, `ReviewRecord`                                 |
-| `data/MarketplaceRepository.kt` | Reads and writes data, using Firebase when it is configured and SharedPreferences in demo mode                                        |
+| `data/MarketplaceRepository.kt` | Reads and writes data with Firebase Authentication and Cloud Firestore                                                                |
 | `firestore.rules`               | Firestore security rules                                                                                                              |
 | `firebase.json`                 | Firebase CLI configuration pointing to the rules file                                                                                 |
 

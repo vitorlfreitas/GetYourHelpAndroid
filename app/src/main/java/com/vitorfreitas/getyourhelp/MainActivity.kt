@@ -62,13 +62,10 @@ private fun GetYourHelpApp(vm: AppViewModel) {
 
     if (state.user == null) {
         LoginScreen(
-            firebaseMode = state.firebaseMode,
             busy = state.busy,
             error = state.error,
             onSignIn = vm::signIn,
-            onRegister = vm::register,
-            onDemoRequester = { vm.demoLogin(true) },
-            onDemoHelper = { vm.demoLogin(false) }
+            onRegister = vm::register
         )
     } else {
         Scaffold(
@@ -99,12 +96,6 @@ private fun GetYourHelpApp(vm: AppViewModel) {
             }
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
-                if (!state.firebaseMode) {
-                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, modifier = Modifier.fillMaxWidth()) {
-                        Text("LOCAL DEMO MODE · Data stays on this device. Configure Firebase for multi-device sync.",
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
                 state.message?.let { MessageBanner(it, isError = false) { vm.clearMessage() } }
                 state.error?.let { MessageBanner(it, isError = true) { vm.clearMessage() } }
                 when (selectedTab) {
@@ -114,7 +105,7 @@ private fun GetYourHelpApp(vm: AppViewModel) {
                     })
                     MainTab.MY_TASKS -> MyTasksScreen(state.tasks, state.myApplications, state.user!!, onTask = { selectedTask = it })
                     MainTab.WALLET -> WalletScreen(state.payments, state.user!!, state.busy, vm::markPayment)
-                    MainTab.PROFILE -> ProfileScreen(state.user!!, state.firebaseMode, state.busy, vm::updateCategories)
+                    MainTab.PROFILE -> ProfileScreen(state.user!!, state.busy, vm::updateCategories)
                 }
             }
         }
@@ -151,13 +142,10 @@ private fun MessageBanner(message: String, isError: Boolean, onDismiss: () -> Un
 
 @Composable
 private fun LoginScreen(
-    firebaseMode: Boolean,
     busy: Boolean,
     error: String?,
     onSignIn: (String, String) -> Unit,
-    onRegister: (String, String, String) -> Unit,
-    onDemoRequester: () -> Unit,
-    onDemoHelper: () -> Unit
+    onRegister: (String, String, String) -> Unit
 ) {
     var registerMode by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
@@ -167,26 +155,18 @@ private fun LoginScreen(
         Text("GetYourHelp", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
         Text("Connect people who need a hand with people ready to help.", style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.height(24.dp))
-        if (firebaseMode) {
-            Text(if (registerMode) "Create account" else "Sign in", style = MaterialTheme.typography.titleLarge)
-            if (registerMode) OutlinedTextField(name, { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(email, { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(password, { password = it }, label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = { if (registerMode) onRegister(name, email, password) else onSignIn(email, password) },
-                enabled = !busy && email.isNotBlank() && password.length >= 6 && (!registerMode || name.isNotBlank()),
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(if (busy) "Please wait…" else if (registerMode) "Create account" else "Sign in") }
-            TextButton(onClick = { registerMode = !registerMode }) {
-                Text(if (registerMode) "Already have an account? Sign in" else "New here? Create an account")
-            }
-        } else {
-            Text("Choose a demo account", style = MaterialTheme.typography.titleLarge)
-            Text("Demo mode uses local device storage only. Create a Firebase project to test real accounts across devices.", style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = onDemoRequester, modifier = Modifier.fillMaxWidth(), enabled = !busy) { Text("Continue as demo requester") }
-            OutlinedButton(onClick = onDemoHelper, modifier = Modifier.fillMaxWidth(), enabled = !busy) { Text("Continue as demo helper") }
+        Text(if (registerMode) "Create account" else "Sign in", style = MaterialTheme.typography.titleLarge)
+        if (registerMode) OutlinedTextField(name, { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(email, { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(password, { password = it }, label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { if (registerMode) onRegister(name, email, password) else onSignIn(email, password) },
+            enabled = !busy && email.isNotBlank() && password.length >= 6 && (!registerMode || name.isNotBlank()),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (busy) "Please wait…" else if (registerMode) "Create account" else "Sign in") }
+        TextButton(onClick = { registerMode = !registerMode }) {
+            Text(if (registerMode) "Already have an account? Sign in" else "New here? Create an account")
         }
         if (!error.isNullOrBlank()) {
             Spacer(Modifier.height(12.dp))
@@ -337,7 +317,7 @@ private fun WalletScreen(payments: List<PaymentRecord>, user: AppUser, busy: Boo
 }
 
 @Composable
-private fun ProfileScreen(user: AppUser, firebaseMode: Boolean, busy: Boolean, onSaveCategories: (List<String>) -> Unit) {
+private fun ProfileScreen(user: AppUser, busy: Boolean, onSaveCategories: (List<String>) -> Unit) {
     val categories = listOf("Pet Care", "Gardening", "Shopping", "Home Help", "Moving", "Cleaning", "Other")
     var selected by remember(user.uid, user.helperCategories) { mutableStateOf(user.helperCategories.toSet()) }
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -353,8 +333,7 @@ private fun ProfileScreen(user: AppUser, firebaseMode: Boolean, busy: Boolean, o
             }
         }
         Button(onClick = { onSaveCategories(selected.toList()) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Save categories") }
-        Spacer(Modifier.height(18.dp))
-        Text("Backend: ${if (firebaseMode) "Firebase connected" else "Local demo mode"}", style = MaterialTheme.typography.labelLarge)    }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

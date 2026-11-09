@@ -1,7 +1,6 @@
 package com.vitorfreitas.getyourhelp
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vitorfreitas.getyourhelp.data.AppUser
 import com.vitorfreitas.getyourhelp.data.MarketplaceRepository
@@ -23,13 +22,12 @@ data class MarketplaceState(
     val loading: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
-    val error: String? = null,
-    val firebaseMode: Boolean = false
+    val error: String? = null
 )
 
-class AppViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = MarketplaceRepository(application)
-    private val _state = MutableStateFlow(MarketplaceState(firebaseMode = repository.isFirebaseMode))
+class AppViewModel : ViewModel() {
+    private val repository = MarketplaceRepository()
+    private val _state = MutableStateFlow(MarketplaceState())
     val state = _state.asStateFlow()
     private var taskObserverJob: Job? = null
 
@@ -72,17 +70,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         refreshMyData()
     }
 
-    fun demoLogin(asRequester: Boolean) = runAction {
-        val user = repository.demoLogin(asRequester)
-        _state.update { it.copy(user = user, message = "Demo mode: ${user.displayName}.") }
-        startTaskObserver()
-        refreshMyData()
-    }
-
     fun signOut() = runAction {
         repository.signOut()
         taskObserverJob?.cancel()
-        _state.update { MarketplaceState(tasks = it.tasks, firebaseMode = repository.isFirebaseMode, message = "Signed out.") }
+        _state.update { MarketplaceState(message = "Signed out.") }
     }
 
     fun createTask(title: String, description: String, category: String, type: String, amount: String, methods: List<String>, location: String) = runAction {
