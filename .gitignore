@@ -10,7 +10,6 @@ captures/
 .externalNativeBuild/
 .cxx/
 .kotlin/
-/build/
 *.apk
 *.aab
 *.keystore
