@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 
 data class MarketplaceState(
     val user: AppUser? = null,
@@ -37,6 +38,8 @@ class AppViewModel : ViewModel() {
                 val current = repository.currentUser()
                 _state.update { it.copy(user = current, loading = false) }
                 if (current != null) startTaskObserver()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _state.update { it.copy(loading = false, error = e.message ?: "Could not restore the session.") }
             }
@@ -50,6 +53,8 @@ class AppViewModel : ViewModel() {
                 repository.observeTasks().collect { tasks ->
                     _state.update { it.copy(tasks = tasks, loading = false) }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _state.update { it.copy(loading = false, error = e.message ?: "Could not load tasks.") }
             }
@@ -71,8 +76,9 @@ class AppViewModel : ViewModel() {
     }
 
     fun signOut() = runAction {
-        repository.signOut()
         taskObserverJob?.cancel()
+        taskObserverJob = null
+        repository.signOut()
         _state.update { MarketplaceState(message = "Signed out.") }
     }
 
@@ -140,6 +146,8 @@ class AppViewModel : ViewModel() {
                 val apps = repository.myApplications(user.uid)
                 val payments = repository.paymentRecords(user.uid)
                 _state.update { it.copy(myApplications = apps, payments = payments) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _state.update { it.copy(error = e.message ?: "Could not refresh your activity.") }
             }
@@ -152,6 +160,7 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(busy = true, error = null, message = null) }
             try { action() }
+            catch (e: CancellationException) { throw e }
             catch (e: Exception) { _state.update { it.copy(error = e.message ?: "Something went wrong.") } }
             finally { _state.update { it.copy(busy = false) } }
         }
