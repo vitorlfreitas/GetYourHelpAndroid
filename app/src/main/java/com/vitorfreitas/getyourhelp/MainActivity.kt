@@ -32,6 +32,7 @@ import com.vitorfreitas.getyourhelp.data.TaskItem
 import java.text.DateFormat
 import java.util.Date
 
+/** The app's single activity */
 class MainActivity : ComponentActivity() {
     private val viewModel: AppViewModel by viewModels()
 
@@ -47,6 +48,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Tabs in the bottom navigation bar. */
 private enum class MainTab(val label: String) { BROWSE("Browse"), CREATE("Create"), MY_TASKS("My Tasks"), WALLET("Wallet"), PROFILE("Profile") }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -140,6 +142,7 @@ private fun MessageBanner(message: String, isError: Boolean, onDismiss: () -> Un
     }
 }
 
+/** Email and password sign-in, with a switch to create a new account. */
 @Composable
 private fun LoginScreen(
     busy: Boolean,
@@ -175,6 +178,7 @@ private fun LoginScreen(
     }
 }
 
+/** Open tasks published by other users, with a category filter. */
 @Composable
 private fun BrowseScreen(tasks: List<TaskItem>, user: AppUser, onTask: (TaskItem) -> Unit) {
     var category by remember { mutableStateOf("All") }
@@ -222,6 +226,7 @@ private fun StatusTag(status: String) {
     }
 }
 
+/** Form to publish a task. The button stays disabled until the required fields are valid. */
 @Composable
 private fun CreateTaskScreen(
     busy: Boolean,
@@ -272,6 +277,7 @@ private fun CreateTaskScreen(
     }
 }
 
+/** Tasks the user published, and tasks they applied for or were assigned to. */
 @Composable
 private fun MyTasksScreen(tasks: List<TaskItem>, applications: List<TaskApplication>, user: AppUser, onTask: (TaskItem) -> Unit) {
     val ownTasks = tasks.filter { it.ownerId == user.uid }
@@ -291,6 +297,7 @@ private fun MyTasksScreen(tasks: List<TaskItem>, applications: List<TaskApplicat
     }
 }
 
+/** Payment records for the user's paid tasks. Record keeping only; no money moves through the app. */
 @Composable
 private fun WalletScreen(payments: List<PaymentRecord>, user: AppUser, busy: Boolean, onMarkPaid: (PaymentRecord) -> Unit) {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -316,6 +323,7 @@ private fun WalletScreen(payments: List<PaymentRecord>, user: AppUser, busy: Boo
     }
 }
 
+/** Profile details and the categories of work the helper is interested in. */
 @Composable
 private fun ProfileScreen(user: AppUser, busy: Boolean, onSaveCategories: (List<String>) -> Unit) {
     val categories = listOf("Pet Care", "Gardening", "Shopping", "Home Help", "Moving", "Cleaning", "Other")
@@ -336,6 +344,14 @@ private fun ProfileScreen(user: AppUser, busy: Boolean, onSaveCategories: (List<
     }
 }
 
+/**
+ * Task details. The actions shown depend on who is looking and on the task status:
+ * - owner, OPEN: the list of applications, each with "Accept applicant"
+ * - anyone else, OPEN: choose a payment method and apply
+ * - owner, ASSIGNED: "Confirm task completed"
+ * - owner or assigned helper, COMPLETED: "Leave a review"
+ * - anyone except the owner: "Report this task"
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TaskDetailDialog(

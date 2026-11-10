@@ -1,4 +1,6 @@
 rules_version = '2';
+
+// Security rules for GetYourHelp. These run on Firebase's servers and are the real access control
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
@@ -19,11 +21,13 @@ service cloud.firestore {
         get(/databases/$(database)/documents/tasks/$(taskId)).data.assignedHelperId == request.auth.uid;
     }
 
+    // Users can only read and write their own profile
     match /users/{uid} {
       allow create, read, update: if signedIn() && request.auth.uid == uid;
       allow delete: if false;
     }
 
+    // Any signed-in user can read tasks. Only the owner can create or edit one, and only delete it while it is still OPEN
     match /tasks/{taskId} {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid
@@ -34,6 +38,9 @@ service cloud.firestore {
         && resource.data.status == 'OPEN';
     }
 
+    // A helper can apply to someone else's OPEN task
+    // Applications are visible to the helper and the task owner
+    // The owner can accept/decline while the helper can only withdraw
     match /applications/{applicationId} {
       allow read: if signedIn() && (
         resource.data.helperId == request.auth.uid || taskOwner(resource.data.taskId)
@@ -53,6 +60,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Payment records are visible only to the payer and payee
     match /paymentRecords/{recordId} {
       allow read: if signedIn() &&
         (resource.data.payerId == request.auth.uid || resource.data.payeeId == request.auth.uid);
@@ -65,6 +73,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Any signed-in user can report an existing task. Reports cannot be edited or deleted
     match /reports/{reportId} {
       allow create: if signedIn() && request.resource.data.reporterId == request.auth.uid
         && taskExists(request.resource.data.taskId);
@@ -72,6 +81,7 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Reviews (rating 1-5) can only be written for a COMPLETED task
     match /reviews/{reviewId} {
       allow read: if signedIn();
       allow create: if signedIn()

@@ -14,6 +14,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
+/**
+ * Everything the screens display, in one immutable object.
+ * - user: null means signed out, so the login screen is shown
+ * - busy: an action is running, so buttons are disabled
+ * - message / error: text shown in the banner at the top of the screen
+ */
 data class MarketplaceState(
     val user: AppUser? = null,
     val tasks: List<TaskItem> = emptyList(),
@@ -26,12 +32,18 @@ data class MarketplaceState(
     val error: String? = null
 )
 
+/**
+ * Connects the Compose screens to [MarketplaceRepository] (MVVM).
+ * Screens call the public functions below and redraw whenever [state] changes.
+ * The ViewModel survives screen rotation, so the state is not lost.
+ */
 class AppViewModel : ViewModel() {
     private val repository = MarketplaceRepository()
     private val _state = MutableStateFlow(MarketplaceState())
     val state = _state.asStateFlow()
     private var taskObserverJob: Job? = null
 
+    // On app start, restore the session if Firebase still has a signed-in user.
     init {
         viewModelScope.launch {
             try {
@@ -46,6 +58,9 @@ class AppViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Starts (or restarts) listening to the live task list from Firestore.
+     */
     private fun startTaskObserver() {
         taskObserverJob?.cancel()
         taskObserverJob = viewModelScope.launch {
@@ -139,6 +154,9 @@ class AppViewModel : ViewModel() {
         _state.update { it.copy(user = updated, message = "Helper categories updated.") }
     }
 
+    /**
+     * Reloads the user's own applications and payment records
+     */
     fun refreshMyData() {
         val user = state.value.user ?: return
         viewModelScope.launch {

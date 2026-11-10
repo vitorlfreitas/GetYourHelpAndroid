@@ -10,10 +10,17 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
+/**
+ * The only class that talks to Firebase.
+ *
+ * Firebase Authentication handles accounts
+ * Cloud Firestore stores the shared data in the collections users, tasks, applications, paymentRecords, reports and reviews.
+ */
 class MarketplaceRepository {
     private val auth = FirebaseAuth.getInstance()
     private val db = FirebaseFirestore.getInstance()
 
+    /** Returns the signed-in user with their profile from `users`, or null if nobody is signed in. */
     suspend fun currentUser(): AppUser? {
         val firebaseUser = auth.currentUser ?: return null
         val doc = db.collection("users").document(firebaseUser.uid).get().await()
@@ -26,6 +33,7 @@ class MarketplaceRepository {
         )
     }
 
+    /** Signs in with email and password. Creates the profile if it is missing. */
     suspend fun signIn(email: String, password: String): AppUser {
         val result = auth.signInWithEmailAndPassword(email.trim(), password).await()
         val user = result.user ?: error("Authentication did not return a user.")
@@ -44,6 +52,7 @@ class MarketplaceRepository {
         return currentUser() ?: error("Could not load user profile.")
     }
 
+    /** Creates a Firebase Authentication account and its profile document in `users`. */
     suspend fun register(name: String, email: String, password: String): AppUser {
         require(name.isNotBlank()) { "Enter your name." }
         val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
@@ -70,6 +79,9 @@ class MarketplaceRepository {
         return updated
     }
 
+    /**
+     * Live list of all tasks, newest first. Firestore pushes a new list whenever any task changes, so every device sees new tasks and status changes without refreshing.
+     */
     fun observeTasks(): Flow<List<TaskItem>> = callbackFlow {
         val registration = db.collection("tasks")
             .orderBy("createdAt", Query.Direction.DESCENDING)
@@ -107,14 +119,17 @@ class MarketplaceRepository {
         db.collection("tasks").document(task.id).set(task.toMap()).await()
     }
 
+    /** All applications for one task. The security rules only allow the task owner to run this. */
     suspend fun applicationsForTask(taskId: String): List<TaskApplication> =
         db.collection("applications").whereEqualTo("taskId", taskId).get().await()
             .documents.mapNotNull { it.toApplication() }
 
+    /** Applications sent by this helper. */
     suspend fun myApplications(userId: String): List<TaskApplication> =
         db.collection("applications").whereEqualTo("helperId", userId).get().await()
             .documents.mapNotNull { it.toApplication() }
 
+    /** Creates a PENDING application */
     suspend fun applyToTask(task: TaskItem, helper: AppUser, preferredMethod: String) {
         require(task.ownerId != helper.uid) { "You cannot apply to your own task." }
         require(task.status == "OPEN") { "This task is no longer open." }
@@ -131,6 +146,12 @@ class MarketplaceRepository {
         db.collection("applications").document(application.id).set(application.toMap()).await()
     }
 
+    /**
+     * Accepts one helper. Everything is written in a single batch, so it all succeeds or all fails:
+     * - the chosen application becomes ACCEPTED and other pending ones DECLINED
+     * - the task becomes ASSIGNED, with the helper and the agreed payment method
+     * - for paid tasks, a PENDING payment record is created
+     */
     suspend fun acceptApplication(task: TaskItem, application: TaskApplication) {
         require(task.ownerId == auth.currentUser?.uid) { "Only the requester can accept an application." }
         require(task.status == "OPEN") { "This task is no longer open." }
@@ -159,18 +180,21 @@ class MarketplaceRepository {
         batch.commit().await()
     }
 
+    /** The requester confirms the work is done: ASSIGNED becomes COMPLETED. */
     suspend fun completeTask(task: TaskItem, user: AppUser) {
         require(task.ownerId == user.uid) { "Only the requester can confirm task completion." }
         require(task.status == "ASSIGNED") { "Only an assigned task can be completed." }
         db.collection("tasks").document(task.id).update("status", "COMPLETED").await()
     }
 
+    /** Saves a report for later review. The task is not removed automatically. */
     suspend fun reportTask(task: TaskItem, user: AppUser, reason: String, details: String) {
         require(reason.isNotBlank()) { "Select a report reason." }
         val report = TaskReport(UUID.randomUUID().toString(), task.id, user.uid, reason, details.trim())
         db.collection("reports").document(report.id).set(report.toMap()).await()
     }
 
+    /** After completion, the requester and the assigned helper can each review the other once. */
     suspend fun submitReview(task: TaskItem, reviewer: AppUser, rating: Int, comment: String) {
         require(task.status == "COMPLETED") { "Reviews are available after a task is completed." }
         require(rating in 1..5) { "Choose a rating from 1 to 5." }
@@ -187,6 +211,7 @@ class MarketplaceRepository {
         db.collection("reviews").document(review.id).set(review.toMap()).await()
     }
 
+    /** Payment records where the user is the payer or the payee, newest first. */
     suspend fun paymentRecords(userId: String): List<PaymentRecord> {
         val outgoing = db.collection("paymentRecords").whereEqualTo("payerId", userId).get().await()
         val incoming = db.collection("paymentRecords").whereEqualTo("payeeId", userId).get().await()
@@ -194,6 +219,7 @@ class MarketplaceRepository {
             .mapNotNull { it.toPayment() }.sortedByDescending { it.updatedAt }
     }
 
+    /** Marks a payment as paid. This only updates the record; no money is moved. */
     suspend fun markPaymentRecorded(paymentId: String, user: AppUser) {
         val ref = db.collection("paymentRecords").document(paymentId)
         val doc = ref.get().await()
@@ -204,6 +230,7 @@ class MarketplaceRepository {
     }
 }
 
+// Converting data classes to Firestore documents (field name -> value).
 private fun TaskItem.toMap() = mapOf(
     "id" to id, "ownerId" to ownerId, "ownerName" to ownerName, "title" to title,
     "description" to description, "category" to category, "taskType" to taskType, "amount" to amount,
@@ -229,6 +256,7 @@ private fun ReviewRecord.toMap() = mapOf(
     "revieweeName" to revieweeName, "rating" to rating, "comment" to comment, "createdAt" to createdAt
 )
 
+// Reading Firestore documents back into data classes. A malformed document returns null and is skipped.
 private fun DocumentSnapshot.toTaskItem(): TaskItem? = try {
     TaskItem(id = id, ownerId = getString("ownerId").orEmpty(), ownerName = getString("ownerName").orEmpty(),
         title = getString("title").orEmpty(), description = getString("description").orEmpty(), category = getString("category").orEmpty(),

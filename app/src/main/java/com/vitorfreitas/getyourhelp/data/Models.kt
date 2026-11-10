@@ -1,5 +1,7 @@
 package com.vitorfreitas.getyourhelp.data
 
+// Data classes saved in Cloud Firestore, one collection per class.
+
 data class AppUser(
     val uid: String,
     val displayName: String,
@@ -7,6 +9,12 @@ data class AppUser(
     val helperCategories: List<String> = emptyList()
 )
 
+/**
+ * A task published by a requester (collection `tasks`).
+ *
+ * - taskType: "PAID" or "VOLUNTEER". Volunteer tasks have amount 0 and no payment methods.
+ * - status: "OPEN" -> "ASSIGNED" (a helper was accepted) -> "COMPLETED" (requester confirmed).
+ */
 data class TaskItem(
     val id: String,
     val ownerId: String,
@@ -25,6 +33,10 @@ data class TaskItem(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+/**
+ * A helper's application for a task (collection `applications`).
+ * status: "PENDING", then "ACCEPTED" or "DECLINED" when the requester picks a helper.
+ */
 data class TaskApplication(
     val id: String,
     val taskId: String,
@@ -35,6 +47,10 @@ data class TaskApplication(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+/**
+ * Record of an agreed payment for a paid task (collection `paymentRecords`).
+ * The app never moves money; status only goes from "PENDING" to "MARKED_PAID".
+ */
 data class PaymentRecord(
     val id: String,
     val taskId: String,
@@ -48,6 +64,7 @@ data class PaymentRecord(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
+/** A user's report about a task (collection `reports`), stored for later review. */
 data class TaskReport(
     val id: String,
     val taskId: String,
@@ -58,6 +75,7 @@ data class TaskReport(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+/** A 1-5 star review between requester and helper after a completed task (collection `reviews`). */
 data class ReviewRecord(
     val id: String,
     val taskId: String,
