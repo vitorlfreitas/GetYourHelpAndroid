@@ -1,9 +1,8 @@
 <resources>
+    <!-- Window theme, visible only until Compose draws the first frame. The app's real theme is
+         GetYourHelpTheme (ui/theme). System bar colours are set at runtime by enableEdgeToEdge(). -->
     <style name="Theme.GetYourHelp" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#245A73</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:navigationBarColor">#FFFFFF</item>
-        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:colorAccent">@color/brand_primary</item>
+        <item name="android:windowBackground">@color/window_background</item>
     </style>
 </resources>

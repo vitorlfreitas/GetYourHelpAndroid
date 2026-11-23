@@ -63,4 +63,7 @@ dependencies {
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-messaging")
+
+    // Local unit tests (src/test), run with ./gradlew :app:testDebugUnitTest
+    testImplementation("junit:junit:4.13.2")
 }

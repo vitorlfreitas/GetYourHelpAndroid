@@ -12,7 +12,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -29,7 +28,7 @@ import com.vitorfreitas.getyourhelp.AppViewModel
  * The bar is shown on the main tabs and hidden on detail screens, which have a back arrow instead.
  */
 @Composable
-fun MainScaffold(vm: AppViewModel, userId: String, snackbarHostState: SnackbarHostState) {
+fun MainScaffold(vm: AppViewModel, snackbarHostState: SnackbarHostState) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
@@ -37,8 +36,6 @@ fun MainScaffold(vm: AppViewModel, userId: String, snackbarHostState: SnackbarHo
     val currentTab = if (currentDestination == null) TopLevelDestination.BROWSE
     else TopLevelDestination.entries.firstOrNull { currentDestination.hasRoute(it.route::class) }
     val showBottomBar = currentTab != null
-
-    LaunchedEffect(userId) { vm.refreshMyData() }
 
     Scaffold(
         // Each screen has its own top bar, which already leaves room for the status bar.
@@ -51,10 +48,11 @@ fun MainScaffold(vm: AppViewModel, userId: String, snackbarHostState: SnackbarHo
             if (showBottomBar) {
                 NavigationBar {
                     TopLevelDestination.entries.forEach { tab ->
+                        val selected = tab == currentTab
                         NavigationBarItem(
-                            selected = tab == currentTab,
+                            selected = selected,
                             onClick = { navController.navigateToTab(tab) },
-                            icon = { Icon(tab.icon, contentDescription = null) },
+                            icon = { Icon(if (selected) tab.selectedIcon else tab.unselectedIcon, contentDescription = null) },
                             label = { Text(tab.label) }
                         )
                     }
@@ -63,7 +61,7 @@ fun MainScaffold(vm: AppViewModel, userId: String, snackbarHostState: SnackbarHo
         }
     ) { innerPadding ->
         AppNavHost(
-            vm = vm,
+            appVm = vm,
             navController = navController,
             modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)
         )

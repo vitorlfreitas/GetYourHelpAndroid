@@ -25,10 +25,13 @@ enum class TaskType(val label: String) {
     VOLUNTEER("Volunteering")
 }
 
-/** Life cycle of a task: OPEN -> ASSIGNED (a helper was accepted) -> COMPLETED (requester confirmed). */
+/**
+ * Life cycle of a task: OPEN -> ASSIGNED (a helper was accepted) -> COMPLETED (requester confirmed).
+ * The app shows ASSIGNED as "Ongoing", the name used in the project proposal.
+ */
 enum class TaskStatus(val label: String) {
     OPEN("Open"),
-    ASSIGNED("Assigned"),
+    ASSIGNED("Ongoing"),
     COMPLETED("Completed")
 }
 
@@ -62,6 +65,7 @@ data class AppUser(
 /**
  * A task published by a requester (collection `tasks`).
  * Volunteer tasks have amount 0 and no accepted payment methods.
+ * scheduledAt is the expected date and time (epoch milliseconds), or null when the date is flexible.
  * agreedPaymentMethod is set when a helper is accepted (null until then, and for volunteer tasks).
  */
 data class TaskItem(
@@ -75,6 +79,7 @@ data class TaskItem(
     val amount: Double,
     val acceptedPaymentMethods: List<PaymentMethod>,
     val location: String,
+    val scheduledAt: Long? = null,
     val status: TaskStatus = TaskStatus.OPEN,
     val assignedHelperId: String = "",
     val assignedHelperName: String = "",
@@ -82,13 +87,18 @@ data class TaskItem(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-/** A helper's application for a task (collection `applications`). preferredPaymentMethod is null for volunteer tasks. */
+/**
+ * A helper's application for a task (collection `applications`).
+ * The document id is "<taskId>_<helperId>", so a helper can have only one application per task.
+ * preferredPaymentMethod is null for volunteer tasks; message is an optional note to the requester.
+ */
 data class TaskApplication(
     val id: String,
     val taskId: String,
     val helperId: String,
     val helperName: String,
     val preferredPaymentMethod: PaymentMethod?,
+    val message: String = "",
     val status: ApplicationStatus = ApplicationStatus.PENDING,
     val createdAt: Long = System.currentTimeMillis()
 )

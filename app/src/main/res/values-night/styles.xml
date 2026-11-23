@@ -1,0 +1,7 @@
+<resources>
+    <!-- Dark mode version of the window theme (see values/styles.xml) -->
+    <style name="Theme.GetYourHelp" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">@color/brand_primary</item>
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

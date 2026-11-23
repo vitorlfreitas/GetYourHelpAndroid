@@ -1,5 +1,7 @@
 package com.vitorfreitas.getyourhelp.ui
 
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -22,40 +24,41 @@ import com.vitorfreitas.getyourhelp.ui.navigation.MainScaffold
  * Root of the UI. While the saved session is being checked it shows a spinner, then either the
  * login screen or the signed-in app ([MainScaffold]).
  *
- * Messages from the ViewModel are shown here as snackbars, so they stay visible when the
- * screen changes (for example "Signed in successfully." right after logging in).
+ * Messages queued by any ViewModel (see [UserMessenger]) are shown here one at a time as snackbars,
+ * so they stay visible when the screen changes (e.g. "Task published." while the new task opens).
  */
 @Composable
 fun GetYourHelpApp(vm: AppViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val messages by vm.messages.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val user = state.user
 
-    // While signed out, errors are shown under the login form instead of in a snackbar.
-    val errorText = if (user != null) state.error else null
-    val snackbarText = errorText ?: state.message
-    LaunchedEffect(snackbarText) {
-        if (snackbarText != null) {
+    val current = messages.firstOrNull()
+    LaunchedEffect(current?.id) {
+        if (current != null) {
             snackbarHostState.showSnackbar(
-                message = snackbarText,
+                message = current.text,
                 withDismissAction = true,
-                duration = if (snackbarText == errorText) SnackbarDuration.Long else SnackbarDuration.Short
+                duration = if (current.isError) SnackbarDuration.Long else SnackbarDuration.Short
             )
-            vm.clearMessage()
+            vm.dismissMessage(current.id)
         }
     }
 
+    val user = state.user
     when {
         state.checkingSession -> LoadingIndicator()
         user == null -> Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
             LoginScreen(
                 busy = state.busy,
-                error = state.error,
+                error = state.authError,
                 onSignIn = vm::signIn,
                 onRegister = vm::register,
-                modifier = Modifier.padding(padding)
+                onResetPassword = vm::sendPasswordReset,
+                onClearError = vm::clearAuthError,
+                modifier = Modifier.padding(padding).consumeWindowInsets(padding).imePadding()
             )
         }
-        else -> MainScaffold(vm = vm, userId = user.uid, snackbarHostState = snackbarHostState)
+        else -> MainScaffold(vm = vm, snackbarHostState = snackbarHostState)
     }
 }

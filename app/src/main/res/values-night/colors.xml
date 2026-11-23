@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark mode: matches the dark theme's background colour -->
+    <color name="window_background">#101417</color>
+</resources>

@@ -2,17 +2,23 @@ package com.vitorfreitas.getyourhelp
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.vitorfreitas.getyourhelp.data.AppUser
 import com.vitorfreitas.getyourhelp.data.MarketplaceRepository
-import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.PaymentRecord
 import com.vitorfreitas.getyourhelp.data.TaskApplication
 import com.vitorfreitas.getyourhelp.data.TaskCategory
 import com.vitorfreitas.getyourhelp.data.TaskItem
-import com.vitorfreitas.getyourhelp.data.TaskType
+import com.vitorfreitas.getyourhelp.data.authErrorMessage
+import com.vitorfreitas.getyourhelp.data.errorMessage
+import com.vitorfreitas.getyourhelp.ui.UserMessage
+import com.vitorfreitas.getyourhelp.ui.UserMessenger
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
@@ -20,12 +26,14 @@ import kotlin.coroutines.cancellation.CancellationException
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Everything the screens display, in one immutable object.
+ * The data shared by the whole signed-in app, in one immutable object.
  * - user: null means signed out, so the login screen is shown
  * - checkingSession: true at start-up while the app checks whether someone is already signed in
- * - tasksLoaded: false until the first list of tasks arrives from Firestore
- * - busy: an action is running, so buttons are disabled
- * - message / error: text shown in a snackbar (while signed out, errors appear under the login form)
+ * - tasks / tasksLoaded: live list of all tasks; tasksLoaded is false until the first list arrives
+ * - myApplications: live list of the applications this user has sent as a helper
+ * - payments: the user's payment records (loaded when the Wallet opens)
+ * - busy: an action is running, so its buttons are disabled
+ * - authError: why the last sign-in or registration failed, shown under the login form
  */
 data class MarketplaceState(
     val user: AppUser? = null,
@@ -33,23 +41,28 @@ data class MarketplaceState(
     val tasks: List<TaskItem> = emptyList(),
     val tasksLoaded: Boolean = false,
     val myApplications: List<TaskApplication> = emptyList(),
-    val selectedTaskApplications: List<TaskApplication> = emptyList(),
     val payments: List<PaymentRecord> = emptyList(),
     val busy: Boolean = false,
-    val message: String? = null,
-    val error: String? = null
+    val authError: String? = null,
 )
 
 /**
- * Connects the Compose screens to [MarketplaceRepository] (MVVM).
- * Screens call the public functions below and redraw whenever [state] changes.
- * The ViewModel survives screen rotation, so the state is not lost.
+ * Connects the screens to [MarketplaceRepository] (MVVM) for everything that is shared between screens:
+ * the session, the live task list, the user's applications, the wallet and the profile.
+ * Screens with their own logic have their own ViewModel (CreateTaskViewModel, TaskDetailViewModel).
+ * This ViewModel belongs to the activity and survives screen rotation.
  */
-class AppViewModel : ViewModel() {
-    private val repository = MarketplaceRepository()
+class AppViewModel(
+    private val repository: MarketplaceRepository,
+    private val messenger: UserMessenger,
+) : ViewModel() {
     private val _state = MutableStateFlow(MarketplaceState(checkingSession = true))
     val state = _state.asStateFlow()
-    private var taskObserverJob: Job? = null
+
+    /** Messages waiting to be shown as snackbars (see [UserMessenger]). */
+    val messages: StateFlow<List<UserMessage>> = messenger.messages
+
+    private var listenersJob: Job? = null
 
     // On app start, restore the session if Firebase still has a signed-in user.
     init {
@@ -57,146 +70,169 @@ class AppViewModel : ViewModel() {
             try {
                 val current = repository.currentUser()
                 _state.update { it.copy(user = current, checkingSession = false) }
-                if (current != null) startTaskObserver()
+                if (current != null) startListening(current)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(checkingSession = false, error = e.message ?: "Could not restore the session.") }
+                _state.update { it.copy(checkingSession = false, authError = "Could not restore your session. Please sign in.") }
             }
         }
     }
 
     /**
-     * Starts (or restarts) listening to the live task list from Firestore.
+     * Starts (or restarts) the live lists that stay open while someone is signed in:
+     * all tasks, and the applications this user has sent.
      */
-    private fun startTaskObserver() {
-        taskObserverJob?.cancel()
-        taskObserverJob = viewModelScope.launch {
-            try {
-                repository.observeTasks().collect { tasks ->
-                    _state.update { it.copy(tasks = tasks, tasksLoaded = true) }
+    private fun startListening(user: AppUser) {
+        listenersJob?.cancel()
+        listenersJob =
+            viewModelScope.launch {
+                launch {
+                    repository
+                        .observeTasks()
+                        .catch { e ->
+                            _state.update { it.copy(tasksLoaded = true) }
+                            messenger.showError("Could not load tasks. ${errorMessage(e)}")
+                        }.collect { tasks -> _state.update { it.copy(tasks = tasks, tasksLoaded = true) } }
                 }
+                launch {
+                    repository
+                        .observeMyApplications(user.uid)
+                        .catch { e -> messenger.showError("Could not load your applications. ${errorMessage(e)}") }
+                        .collect { applications -> _state.update { it.copy(myApplications = applications) } }
+                }
+            }
+    }
+
+    // Session
+
+    fun signIn(
+        email: String,
+        password: String,
+    ) = runAuthAction {
+        val user = repository.signIn(email, password)
+        _state.update { it.copy(user = user) }
+        startListening(user)
+        messenger.show("Welcome back, ${user.displayName.substringBefore(' ')}!")
+    }
+
+    fun register(
+        name: String,
+        email: String,
+        password: String,
+    ) = runAuthAction {
+        val user = repository.register(name, email, password)
+        _state.update { it.copy(user = user) }
+        startListening(user)
+        messenger.show("Account created. Welcome, ${user.displayName.substringBefore(' ')}!")
+    }
+
+    /** Emails a password reset link. The answer is the same whether or not the account exists. */
+    fun sendPasswordReset(email: String) {
+        viewModelScope.launch {
+            try {
+                repository.sendPasswordReset(email)
+                messenger.show("If an account exists for ${email.trim()}, a reset link is on its way. Check your inbox.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(tasksLoaded = true, error = e.message ?: "Could not load tasks.") }
+                messenger.showError(authErrorMessage(e))
             }
         }
     }
 
-    fun signIn(email: String, password: String) = runAction {
-        val signedInUser = repository.signIn(email, password)
-        _state.update { it.copy(user = signedInUser, message = "Signed in successfully.") }
-        startTaskObserver()
-        refreshMyData()
-    }
+    fun signOut() {
 
-    fun register(name: String, email: String, password: String) = runAction {
-        val createdUser = repository.register(name, email, password)
-        _state.update { it.copy(user = createdUser, message = "Account created.") }
-        startTaskObserver()
-        refreshMyData()
-    }
-
-    fun signOut() = runAction {
-        taskObserverJob?.cancel()
-        taskObserverJob = null
+        // Stop the live lists before signing out, otherwise they fail with "permission denied".
+        listenersJob?.cancel()
+        listenersJob = null
         repository.signOut()
-        _state.update { MarketplaceState(message = "Signed out.") }
+        _state.value = MarketplaceState()
+        messenger.show("Signed out.")
+
     }
 
-    fun createTask(
-        title: String,
-        description: String,
-        category: TaskCategory,
-        type: TaskType,
-        amount: String,
-        methods: List<PaymentMethod>,
-        location: String
-    ) = runAction {
-        val user = state.value.user ?: error("Please sign in first.")
-        repository.createTask(user, title, description, category, type,
-            if (type == TaskType.PAID) amount.toDoubleOrNull() ?: 0.0 else 0.0, methods, location)
-        _state.update { it.copy(message = "Task published.") }
-    }
+    fun clearAuthError() = _state.update { it.copy(authError = null) }
 
-    fun loadApplications(task: TaskItem) = runAction {
-        val applications = repository.applicationsForTask(task.id)
-        _state.update { it.copy(selectedTaskApplications = applications) }
-    }
+    // Profile and wallet
 
-    fun applyToTask(task: TaskItem, method: PaymentMethod?) = runAction {
-        val user = state.value.user ?: error("Please sign in first.")
-        repository.applyToTask(task, user, method)
-        _state.update { it.copy(message = "Application submitted.") }
-        refreshMyData()
-    }
+    fun updateCategories(categories: List<TaskCategory>) =
+        runAction("Interests saved.") {
+            val user = state.value.user ?: error("Please sign in first.")
+            val updated = repository.updateHelperCategories(user, categories)
+            _state.update { it.copy(user = updated) }
+        }
 
-    fun accept(task: TaskItem, application: TaskApplication) = runAction {
-        repository.acceptApplication(task, application)
-        _state.update { it.copy(message = "Applicant accepted.") }
-        loadApplications(task)
-        refreshMyData()
-    }
-
-    fun complete(task: TaskItem) = runAction {
-        val user = state.value.user ?: error("Please sign in first.")
-        repository.completeTask(task, user)
-        _state.update { it.copy(message = "Task marked as completed. Both parties can now review each other.") }
-    }
-
-    fun report(task: TaskItem, reason: String, details: String) = runAction {
-        val user = state.value.user ?: error("Please sign in first.")
-        repository.reportTask(task, user, reason, details)
-        _state.update { it.copy(message = "Report submitted for review.") }
-    }
-
-    fun review(task: TaskItem, rating: Int, comment: String) = runAction {
-        val user = state.value.user ?: error("Please sign in first.")
-        repository.submitReview(task, user, rating, comment)
-        _state.update { it.copy(message = "Review submitted.") }
-    }
-
-    fun markPayment(payment: PaymentRecord) = runAction {
-        val user = state.value.user ?: error("Please sign in first.")
-        repository.markPaymentRecorded(payment.id, user)
-        _state.update { it.copy(message = "Payment status recorded. The app does not verify external transfers.") }
-        refreshMyData()
-    }
-
-    fun updateCategories(categories: List<TaskCategory>) = runAction {
-        val user = state.value.user ?: error("Please sign in first.")
-        val updated = repository.updateHelperCategories(user, categories)
-        _state.update { it.copy(user = updated, message = "Helper categories updated.") }
-    }
-
-    /**
-     * Reloads the user's own applications and payment records
-     */
-    fun refreshMyData() {
+    /** Loads the user's payment records (called when the Wallet opens). */
+    fun refreshPayments() {
         val user = state.value.user ?: return
         viewModelScope.launch {
             try {
-                val apps = repository.myApplications(user.uid)
                 val payments = repository.paymentRecords(user.uid)
-                _state.update { it.copy(myApplications = apps, payments = payments) }
+                _state.update { it.copy(payments = payments) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(error = e.message ?: "Could not refresh your activity.") }
+                messenger.showError("Could not load your payments. ${errorMessage(e)}")
             }
         }
     }
 
-    fun clearMessage() { _state.update { it.copy(message = null, error = null) } }
-
-    private fun runAction(action: suspend () -> Unit) {
-        viewModelScope.launch {
-            _state.update { it.copy(busy = true, error = null, message = null) }
-            try { action() }
-            catch (e: CancellationException) { throw e }
-            catch (e: Exception) { _state.update { it.copy(error = e.message ?: "Something went wrong.") } }
-            finally { _state.update { it.copy(busy = false) } }
+    fun markPayment(payment: PaymentRecord) =
+        runAction("Payment marked as paid. The app does not verify transfers.") {
+            val user = state.value.user ?: error("Please sign in first.")
+            repository.markPaymentRecorded(payment.id, user)
+            _state.update { it.copy(payments = repository.paymentRecords(user.uid)) }
         }
+
+    fun dismissMessage(id: Long) = messenger.dismiss(id)
+
+    /** Runs an action, disabling buttons meanwhile, then shows [successMessage] or the error. */
+    private fun runAction(
+        successMessage: String,
+        action: suspend () -> Unit,
+    ) {
+        if (state.value.busy) return
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true) }
+            try {
+                action()
+                messenger.show(successMessage)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                messenger.showError(errorMessage(e))
+            } finally {
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    /** Like [runAction], but a failure is shown under the login form instead of in a snackbar. */
+    private fun runAuthAction(action: suspend () -> Unit) {
+        if (state.value.busy) return
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, authError = null) }
+            try {
+                action()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(authError = authErrorMessage(e)) }
+            } finally {
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    companion object {
+        /** Creates this ViewModel with the shared repository and messenger from the AppContainer. */
+        val Factory =
+            viewModelFactory {
+                initializer {
+                    val container = appContainer()
+                    AppViewModel(container.repository, container.messenger)
+                }
+            }
     }
 }

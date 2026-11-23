@@ -7,18 +7,27 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function taskPath(taskId) {
+      return /databases/$(database)/documents/tasks/$(taskId);
+    }
+
     function taskExists(taskId) {
-      return exists(/databases/$(database)/documents/tasks/$(taskId));
+      return exists(taskPath(taskId));
     }
 
+    function taskData(taskId) {
+      return get(taskPath(taskId)).data;
+    }
+
+    // get() of a task that does not exist fails, and a failing rule denies the request, so no exists() is needed.
+    // (Fewer calls matters: a transaction may use at most 20 get()/exists() calls in total.)
     function taskOwner(taskId) {
-      return signedIn() && taskExists(taskId) &&
-        get(/databases/$(database)/documents/tasks/$(taskId)).data.ownerId == request.auth.uid;
+      return signedIn() && taskData(taskId).ownerId == request.auth.uid;
     }
 
-    function taskHelper(taskId) {
-      return signedIn() && taskExists(taskId) &&
-        get(/databases/$(database)/documents/tasks/$(taskId)).data.assignedHelperId == request.auth.uid;
+    // True when an update changes only the listed fields
+    function onlyChanges(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
     }
 
     // Users can only read and write their own profile
@@ -27,35 +36,74 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Any signed-in user can read tasks. Only the owner can create or edit one, and only delete it while it is still OPEN
+    // Any signed-in user can read tasks. Only the owner can create one, and its status only moves forward:
+    // OPEN -> ASSIGNED (in the same write that accepts the helper's application) -> COMPLETED
     match /tasks/{taskId} {
       allow read: if signedIn();
-      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.status == 'OPEN';
-      allow update: if signedIn() && resource.data.ownerId == request.auth.uid
-        && request.resource.data.ownerId == resource.data.ownerId;
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == 'OPEN'
+        && request.resource.data.assignedHelperId == '';
+      allow update: if signedIn() && resource.data.ownerId == request.auth.uid && (
+        // Assign a helper: only allowed if, after this write, that helper's application is ACCEPTED
+        (resource.data.status == 'OPEN'
+          && request.resource.data.status == 'ASSIGNED'
+          && onlyChanges(['status', 'assignedHelperId', 'assignedHelperName', 'agreedPaymentMethod'])
+          && getAfter(/databases/$(database)/documents/applications/$(taskId + '_' + request.resource.data.assignedHelperId)).data.status == 'ACCEPTED')
+        ||
+        // Confirm the work is done
+        (resource.data.status == 'ASSIGNED'
+          && request.resource.data.status == 'COMPLETED'
+          && onlyChanges(['status']))
+      );
       allow delete: if signedIn() && resource.data.ownerId == request.auth.uid
         && resource.data.status == 'OPEN';
     }
 
-    // A helper can apply to someone else's OPEN task
-    // Applications are visible to the helper and the task owner
-    // The owner can accept/decline while the helper can only withdraw
+    // Applications are visible to the helper who sent them and to the task owner.
+    // The document id is "<taskId>_<helperId>", so a helper can only have one application per task.
     match /applications/{applicationId} {
       allow read: if signedIn() && (
         resource.data.helperId == request.auth.uid || taskOwner(resource.data.taskId)
       );
+      // A helper applies to someone else's OPEN task, with an optional message of up to 300 characters
       allow create: if signedIn()
+        && applicationId == request.resource.data.taskId + '_' + request.auth.uid
         && request.resource.data.helperId == request.auth.uid
-        && taskExists(request.resource.data.taskId)
-        && get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.ownerId != request.auth.uid
-        && get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.status == 'OPEN'
-        && request.resource.data.status == 'PENDING';
+        && request.resource.data.status == 'PENDING'
+        && taskData(request.resource.data.taskId).ownerId != request.auth.uid
+        && taskData(request.resource.data.taskId).status == 'OPEN'
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 300;
       allow update: if signedIn() && (
-        taskOwner(resource.data.taskId) ||
-        (resource.data.helperId == request.auth.uid &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
-          request.resource.data.status == 'WITHDRAWN')
+        // The owner accepts a pending application, in the same write that assigns the task to this helper
+        (taskOwner(resource.data.taskId)
+          && resource.data.status == 'PENDING'
+          && request.resource.data.status == 'ACCEPTED'
+          && onlyChanges(['status'])
+          && taskData(resource.data.taskId).status == 'OPEN'
+          && getAfter(taskPath(resource.data.taskId)).data.assignedHelperId == resource.data.helperId)
+        ||
+        // The owner declines a pending application
+        (taskOwner(resource.data.taskId)
+          && resource.data.status == 'PENDING'
+          && request.resource.data.status == 'DECLINED'
+          && onlyChanges(['status']))
+        ||
+        // The helper withdraws a pending application
+        (resource.data.helperId == request.auth.uid
+          && resource.data.status == 'PENDING'
+          && request.resource.data.status == 'WITHDRAWN'
+          && onlyChanges(['status']))
+        ||
+        // The helper applies again after withdrawing, while the task is still open
+        (resource.data.helperId == request.auth.uid
+          && resource.data.status == 'WITHDRAWN'
+          && request.resource.data.status == 'PENDING'
+          && taskData(resource.data.taskId).status == 'OPEN'
+          && onlyChanges(['status', 'preferredPaymentMethod', 'message', 'helperName', 'createdAt'])
+          && request.resource.data.message is string
+          && request.resource.data.message.size() <= 300)
       );
       allow delete: if false;
     }
@@ -69,7 +117,7 @@ service cloud.firestore {
         && taskExists(request.resource.data.taskId);
       allow update: if signedIn() &&
         (resource.data.payerId == request.auth.uid || resource.data.payeeId == request.auth.uid)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+        && onlyChanges(['status', 'updatedAt']);
       allow delete: if false;
     }
 
@@ -90,14 +138,14 @@ service cloud.firestore {
         && request.resource.data.rating >= 1
         && request.resource.data.rating <= 5
         && taskExists(request.resource.data.taskId)
-        && get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.status == 'COMPLETED'
+        && taskData(request.resource.data.taskId).status == 'COMPLETED'
         && request.auth.uid in [
-          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.ownerId,
-          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.assignedHelperId
+          taskData(request.resource.data.taskId).ownerId,
+          taskData(request.resource.data.taskId).assignedHelperId
         ]
         && request.resource.data.revieweeId in [
-          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.ownerId,
-          get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data.assignedHelperId
+          taskData(request.resource.data.taskId).ownerId,
+          taskData(request.resource.data.taskId).assignedHelperId
         ]
         && request.resource.data.revieweeId != request.auth.uid;
       allow update, delete: if false;

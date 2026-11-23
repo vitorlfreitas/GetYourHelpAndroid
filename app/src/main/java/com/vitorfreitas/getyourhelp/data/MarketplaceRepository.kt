@@ -1,9 +1,11 @@
 package com.vitorfreitas.getyourhelp.data
 
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.vitorfreitas.getyourhelp.validation.TaskValidator
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -19,10 +21,16 @@ import kotlin.enums.enumEntries
  *
  * Firebase Authentication handles accounts
  * Cloud Firestore stores the shared data in the collections users, tasks, applications, paymentRecords, reports and reviews.
+ *
+ * Functions named observeX return a Flow: Firestore pushes a new value whenever the data changes,
+ * so every device sees changes without refreshing.
  */
 class MarketplaceRepository {
     private val auth = FirebaseAuth.getInstance()
     private val db = FirebaseFirestore.getInstance()
+
+    /** The id of the signed-in user, or null when nobody is signed in. */
+    fun currentUserId(): String? = auth.currentUser?.uid
 
     /** Returns the signed-in user with their profile from `users`, or null if nobody is signed in. */
     suspend fun currentUser(): AppUser? {
@@ -60,6 +68,8 @@ class MarketplaceRepository {
         require(name.isNotBlank()) { "Enter your name." }
         val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
         val user = result.user ?: error("Registration did not return a user.")
+        // Also store the name on the Firebase account itself, not only in Firestore.
+        user.updateProfile(UserProfileChangeRequest.Builder().setDisplayName(name.trim()).build()).await()
         val profile = mapOf(
             "uid" to user.uid,
             "displayName" to name.trim(),
@@ -69,6 +79,14 @@ class MarketplaceRepository {
         )
         db.collection("users").document(user.uid).set(profile).await()
         return AppUser(user.uid, name.trim(), email.trim())
+    }
+
+    /**
+     * Asks Firebase to email a password reset link. For privacy, Firebase does not say whether an
+     * account exists for the address, so this succeeds either way.
+     */
+    suspend fun sendPasswordReset(email: String) {
+        auth.sendPasswordResetEmail(email.trim()).await()
     }
 
     fun signOut() {
@@ -82,9 +100,9 @@ class MarketplaceRepository {
         return updated
     }
 
-    /**
-     * Live list of all tasks, newest first. Firestore pushes a new list whenever any task changes, so every device sees new tasks and status changes without refreshing.
-     */
+    // Tasks
+
+    /** Live list of all tasks, newest first. */
     fun observeTasks(): Flow<List<TaskItem>> = callbackFlow {
         val registration = db.collection("tasks")
             .orderBy("createdAt", Query.Direction.DESCENDING)
@@ -95,6 +113,17 @@ class MarketplaceRepository {
         awaitClose { registration.remove() }
     }
 
+    /** Live copy of one task. Emits null if the task does not exist (for example, it was deleted). */
+    fun observeTask(taskId: String): Flow<TaskItem?> = callbackFlow {
+        val registration = db.collection("tasks").document(taskId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) close(error)
+                else trySend(snapshot?.takeIf { it.exists() }?.toTaskItem())
+            }
+        awaitClose { registration.remove() }
+    }
+
+    /** Publishes a task and returns its id. The form is validated by TaskValidator before this is called. */
     suspend fun createTask(
         owner: AppUser,
         title: String,
@@ -103,8 +132,9 @@ class MarketplaceRepository {
         taskType: TaskType,
         amount: Double,
         paymentMethods: List<PaymentMethod>,
-        location: String
-    ) {
+        location: String,
+        scheduledAt: Long?
+    ): String {
         require(title.isNotBlank()) { "Task title is required." }
         require(description.isNotBlank()) { "Task description is required." }
         require(location.isNotBlank()) { "Location is required." }
@@ -118,80 +148,126 @@ class MarketplaceRepository {
             title = title.trim(), description = description.trim(), category = category,
             taskType = taskType, amount = if (isPaid) amount else 0.0,
             acceptedPaymentMethods = if (isPaid) paymentMethods.distinct() else emptyList(),
-            location = location.trim()
+            location = location.trim(), scheduledAt = scheduledAt
         )
         db.collection("tasks").document(task.id).set(task.toMap()).await()
-    }
-
-    /** All applications for one task. The security rules only allow the task owner to run this. */
-    suspend fun applicationsForTask(taskId: String): List<TaskApplication> =
-        db.collection("applications").whereEqualTo("taskId", taskId).get().await()
-            .documents.mapNotNull { it.toApplication() }
-
-    /** Applications sent by this helper. */
-    suspend fun myApplications(userId: String): List<TaskApplication> =
-        db.collection("applications").whereEqualTo("helperId", userId).get().await()
-            .documents.mapNotNull { it.toApplication() }
-
-    /** Creates a PENDING application. preferredMethod is ignored (stored as not applicable) for volunteer tasks. */
-    suspend fun applyToTask(task: TaskItem, helper: AppUser, preferredMethod: PaymentMethod?) {
-        require(task.ownerId != helper.uid) { "You cannot apply to your own task." }
-        require(task.status == TaskStatus.OPEN) { "This task is no longer open." }
-        val isPaid = task.taskType == TaskType.PAID
-        if (isPaid) require(preferredMethod != null && preferredMethod in task.acceptedPaymentMethods) {
-            "Choose a payment method accepted by the requester."
-        }
-        val alreadyApplied = myApplications(helper.uid)
-            .any { it.taskId == task.id && it.status != ApplicationStatus.WITHDRAWN }
-        if (alreadyApplied) error("You have already applied for this task.")
-        val application = TaskApplication(
-            id = UUID.randomUUID().toString(), taskId = task.id, helperId = helper.uid,
-            helperName = helper.displayName, preferredPaymentMethod = if (isPaid) preferredMethod else null
-        )
-        db.collection("applications").document(application.id).set(application.toMap()).await()
-    }
-
-    /**
-     * Accepts one helper. Everything is written in a single batch, so it all succeeds or all fails:
-     * - the chosen application becomes ACCEPTED and other pending ones DECLINED
-     * - the task becomes ASSIGNED, with the helper and the agreed payment method
-     * - for paid tasks, a PENDING payment record is created
-     */
-    suspend fun acceptApplication(task: TaskItem, application: TaskApplication) {
-        require(task.ownerId == auth.currentUser?.uid) { "Only the requester can accept an application." }
-        require(task.status == TaskStatus.OPEN) { "This task is no longer open." }
-        val batch = db.batch()
-        val existingApplications = db.collection("applications").whereEqualTo("taskId", task.id).get().await()
-        existingApplications.documents.forEach { document ->
-            val currentStatus = enumFromStored<ApplicationStatus>(document.getString("status")) ?: ApplicationStatus.PENDING
-            if (currentStatus == ApplicationStatus.PENDING) {
-                val newStatus = if (document.id == application.id) ApplicationStatus.ACCEPTED else ApplicationStatus.DECLINED
-                batch.update(document.reference, "status", newStatus.name)
-            }
-        }
-        batch.update(db.collection("tasks").document(task.id), mapOf(
-            "status" to TaskStatus.ASSIGNED.name, "assignedHelperId" to application.helperId,
-            "assignedHelperName" to application.helperName,
-            "agreedPaymentMethod" to application.preferredPaymentMethod.toStored()
-        ))
-        if (task.taskType == TaskType.PAID) {
-            val payment = PaymentRecord(
-                id = UUID.randomUUID().toString(), taskId = task.id, taskTitle = task.title,
-                payerId = task.ownerId, payeeId = application.helperId,
-                otherPartyName = "${task.ownerName} and ${application.helperName}",
-                amount = task.amount, method = application.preferredPaymentMethod
-            )
-            batch.set(db.collection("paymentRecords").document(payment.id), payment.toMap())
-        }
-        batch.commit().await()
+        return task.id
     }
 
     /** The requester confirms the work is done: ASSIGNED becomes COMPLETED. */
     suspend fun completeTask(task: TaskItem, user: AppUser) {
         require(task.ownerId == user.uid) { "Only the requester can confirm task completion." }
-        require(task.status == TaskStatus.ASSIGNED) { "Only an assigned task can be completed." }
+        require(task.status == TaskStatus.ASSIGNED) { "Only an ongoing task can be completed." }
         db.collection("tasks").document(task.id).update("status", TaskStatus.COMPLETED.name).await()
     }
+
+    // ---------------------------------------------------------------- Applications
+
+    /** Live list of everyone who applied for a task, oldest first. The security rules only allow the task owner to read it. */
+    fun observeApplicationsForTask(taskId: String): Flow<List<TaskApplication>> = callbackFlow {
+        val registration = db.collection("applications").whereEqualTo("taskId", taskId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) close(error)
+                else trySend(snapshot?.documents?.mapNotNull { it.toApplication() }.orEmpty().sortedBy { it.createdAt })
+            }
+        awaitClose { registration.remove() }
+    }
+
+    /** Live list of the applications this helper has sent, newest first. */
+    fun observeMyApplications(userId: String): Flow<List<TaskApplication>> = callbackFlow {
+        val registration = db.collection("applications").whereEqualTo("helperId", userId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) close(error)
+                else trySend(snapshot?.documents?.mapNotNull { it.toApplication() }.orEmpty().sortedByDescending { it.createdAt })
+            }
+        awaitClose { registration.remove() }
+    }
+
+    /**
+     * Sends a PENDING application. preferredMethod is ignored (stored as not applicable) for volunteer tasks.
+     * The document id is "<taskId>_<helperId>", so applying twice is impossible; after a withdrawal the same
+     * document is reused (the security rules allow WITHDRAWN -> PENDING while the task is still open).
+     */
+    suspend fun applyToTask(task: TaskItem, helper: AppUser, preferredMethod: PaymentMethod?, message: String) {
+        require(task.ownerId != helper.uid) { "You cannot apply to your own task." }
+        val isPaid = task.taskType == TaskType.PAID
+        if (isPaid) require(preferredMethod != null && preferredMethod in task.acceptedPaymentMethods) {
+            "Choose a payment method accepted by the requester."
+        }
+        TaskValidator.applicationMessage(message)?.let { throw IllegalArgumentException(it) }
+        // Check the latest status on the server, in case a helper was accepted after the screen was opened.
+        val latest = db.collection("tasks").document(task.id).get().await().toTaskItem()
+        require(latest?.status == TaskStatus.OPEN) { "This task is no longer open." }
+        val application = TaskApplication(
+            id = applicationId(task.id, helper.uid), taskId = task.id, helperId = helper.uid,
+            helperName = helper.displayName, preferredPaymentMethod = if (isPaid) preferredMethod else null,
+            message = message.trim()
+        )
+        db.collection("applications").document(application.id).set(application.toMap()).await()
+    }
+
+    /** The helper takes back a pending application. They can apply again while the task is open. */
+    suspend fun withdrawApplication(application: TaskApplication) {
+        require(application.helperId == auth.currentUser?.uid) { "You can only withdraw your own application." }
+        require(application.status == ApplicationStatus.PENDING) { "Only a pending application can be withdrawn." }
+        db.collection("applications").document(application.id)
+            .update("status", ApplicationStatus.WITHDRAWN.name).await()
+    }
+
+    /** The requester turns down one pending application. The task stays open for others. */
+    suspend fun declineApplication(task: TaskItem, application: TaskApplication) {
+        require(task.ownerId == auth.currentUser?.uid) { "Only the requester can decline an application." }
+        require(application.status == ApplicationStatus.PENDING) { "Only a pending application can be declined." }
+        db.collection("applications").document(application.id)
+            .update("status", ApplicationStatus.DECLINED.name).await()
+    }
+
+    /**
+     * Accepts one helper, inside a Firestore transaction. The transaction first reads the latest task and
+     * applications, and Firestore only commits it if none of them changed in the meantime, so two
+     * helpers can never be accepted for the same task, even if two devices tap "Accept" at once.
+     * In one atomic write:
+     * - the chosen application becomes ACCEPTED and the other pending ones DECLINED
+     * - the task becomes ASSIGNED, with the helper and the agreed payment method
+     * - for paid tasks, a PENDING payment record is created
+     */
+    suspend fun acceptApplication(task: TaskItem, application: TaskApplication) {
+        require(task.ownerId == auth.currentUser?.uid) { "Only the requester can accept an application." }
+        val taskRef = db.collection("tasks").document(task.id)
+        val chosenRef = db.collection("applications").document(application.id)
+        // A transaction cannot run queries, so find the other applications first and re-read them inside it.
+        val otherRefs = db.collection("applications").whereEqualTo("taskId", task.id).get().await()
+            .documents.map { it.reference }.filter { it.id != application.id }
+        db.runTransaction { transaction ->
+            // Firestore requires every read in a transaction to happen before the first write.
+            val latestTask = transaction.get(taskRef)
+            val chosen = transaction.get(chosenRef)
+            val others = otherRefs.map { transaction.get(it) }
+            if (latestTask.getString("status") != TaskStatus.OPEN.name) error("This task already has a helper.")
+            if (chosen.getString("status") != ApplicationStatus.PENDING.name) error("This application is no longer pending.")
+
+            transaction.update(chosenRef, "status", ApplicationStatus.ACCEPTED.name)
+            others.filter { it.getString("status") == ApplicationStatus.PENDING.name }
+                .forEach { transaction.update(it.reference, "status", ApplicationStatus.DECLINED.name) }
+            transaction.update(taskRef, mapOf(
+                "status" to TaskStatus.ASSIGNED.name, "assignedHelperId" to application.helperId,
+                "assignedHelperName" to application.helperName,
+                "agreedPaymentMethod" to application.preferredPaymentMethod.toStored()
+            ))
+            if (task.taskType == TaskType.PAID) {
+                val payment = PaymentRecord(
+                    id = UUID.randomUUID().toString(), taskId = task.id, taskTitle = task.title,
+                    payerId = task.ownerId, payeeId = application.helperId,
+                    otherPartyName = "${task.ownerName} and ${application.helperName}",
+                    amount = task.amount, method = application.preferredPaymentMethod
+                )
+                transaction.set(db.collection("paymentRecords").document(payment.id), payment.toMap())
+            }
+            null
+        }.await()
+    }
+
+    // Reports and reviews
 
     /** Saves a report for later review. The task is not removed automatically. */
     suspend fun reportTask(task: TaskItem, user: AppUser, reason: String, details: String) {
@@ -217,6 +293,8 @@ class MarketplaceRepository {
         db.collection("reviews").document(review.id).set(review.toMap()).await()
     }
 
+    // Payments
+
     /** Payment records where the user is the payer or the payee, newest first. */
     suspend fun paymentRecords(userId: String): List<PaymentRecord> {
         val outgoing = db.collection("paymentRecords").whereEqualTo("payerId", userId).get().await()
@@ -235,6 +313,9 @@ class MarketplaceRepository {
         ref.update(mapOf("status" to PaymentStatus.MARKED_PAID.name, "updatedAt" to System.currentTimeMillis())).await()
     }
 }
+
+/** Document id of a helper's application for a task. The security rules check this format. */
+fun applicationId(taskId: String, helperId: String): String = "${taskId}_$helperId"
 
 // How enums are stored: by name ("OPEN", "CASH"...). A missing payment method (volunteer tasks) is stored as "NOT_APPLICABLE".
 private const val NOT_APPLICABLE = "NOT_APPLICABLE"
@@ -256,13 +337,15 @@ private fun DocumentSnapshot.getStringList(field: String): List<String> =
 private fun TaskItem.toMap() = mapOf(
     "id" to id, "ownerId" to ownerId, "ownerName" to ownerName, "title" to title,
     "description" to description, "category" to category.name, "taskType" to taskType.name, "amount" to amount,
-    "acceptedPaymentMethods" to acceptedPaymentMethods.map { it.name }, "location" to location, "status" to status.name,
+    "acceptedPaymentMethods" to acceptedPaymentMethods.map { it.name }, "location" to location,
+    "scheduledAt" to scheduledAt, "status" to status.name,
     "assignedHelperId" to assignedHelperId, "assignedHelperName" to assignedHelperName,
     "agreedPaymentMethod" to agreedPaymentMethod?.name.orEmpty(), "createdAt" to createdAt
 )
 private fun TaskApplication.toMap() = mapOf(
     "id" to id, "taskId" to taskId, "helperId" to helperId, "helperName" to helperName,
-    "preferredPaymentMethod" to preferredPaymentMethod.toStored(), "status" to status.name, "createdAt" to createdAt
+    "preferredPaymentMethod" to preferredPaymentMethod.toStored(), "message" to message,
+    "status" to status.name, "createdAt" to createdAt
 )
 private fun PaymentRecord.toMap() = mapOf(
     "id" to id, "taskId" to taskId, "taskTitle" to taskTitle, "payerId" to payerId,
@@ -294,6 +377,7 @@ private fun DocumentSnapshot.toTaskItem(): TaskItem? {
             amount = getDouble("amount") ?: 0.0,
             acceptedPaymentMethods = getStringList("acceptedPaymentMethods").mapNotNull { enumFromStored<PaymentMethod>(it) },
             location = getString("location").orEmpty(),
+            scheduledAt = getLong("scheduledAt"),
             status = status,
             assignedHelperId = getString("assignedHelperId").orEmpty(),
             assignedHelperName = getString("assignedHelperName").orEmpty(),
@@ -309,6 +393,7 @@ private fun DocumentSnapshot.toApplication(): TaskApplication? = try {
         helperId = getString("helperId").orEmpty(),
         helperName = getString("helperName").orEmpty(),
         preferredPaymentMethod = enumFromStored<PaymentMethod>(getString("preferredPaymentMethod")),
+        message = getString("message").orEmpty(),
         status = enumFromStored<ApplicationStatus>(getString("status")) ?: ApplicationStatus.PENDING,
         createdAt = getLong("createdAt") ?: 0L
     )

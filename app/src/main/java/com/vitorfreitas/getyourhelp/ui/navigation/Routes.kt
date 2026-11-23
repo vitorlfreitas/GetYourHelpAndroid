@@ -2,10 +2,13 @@ package com.vitorfreitas.getyourhelp.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Work
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Work
 import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.serialization.Serializable
 
@@ -15,19 +18,25 @@ import kotlinx.serialization.Serializable
 // A route is a class instead of a string, so the compiler checks destinations and their arguments.
 
 @Serializable data object BrowseRoute
-@Serializable data object CreateTaskRoute
 @Serializable data object MyTasksRoute
 @Serializable data object WalletRoute
 @Serializable data object ProfileRoute
 
-/** Details of one task. Only the id is passed; the screen reads the latest task data from the ViewModel. */
+/** The "Post a task" form, opened from the button on Browse (or from an empty My Tasks list). */
+@Serializable data object CreateTaskRoute
+
+/** Details of one task. Only the id is passed; the screen loads the live task itself. */
 @Serializable data class TaskDetailRoute(val taskId: String)
 
-/** The tabs of the bottom navigation bar, in display order. */
-enum class TopLevelDestination(val route: Any, val label: String, val icon: ImageVector) {
-    BROWSE(BrowseRoute, "Browse", Icons.Default.Home),
-    CREATE(CreateTaskRoute, "Create", Icons.Default.Add),
-    MY_TASKS(MyTasksRoute, "My Tasks", Icons.Default.Work),
-    WALLET(WalletRoute, "Wallet", Icons.Default.AccountBalanceWallet),
-    PROFILE(ProfileRoute, "Profile", Icons.Default.Person)
+/** The tabs of the bottom navigation bar, in display order. The icon is filled when the tab is selected. */
+enum class TopLevelDestination(
+    val route: Any,
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector
+) {
+    BROWSE(BrowseRoute, "Browse", Icons.Filled.Home, Icons.Outlined.Home),
+    MY_TASKS(MyTasksRoute, "My Tasks", Icons.Filled.Work, Icons.Outlined.Work),
+    WALLET(WalletRoute, "Wallet", Icons.Filled.AccountBalanceWallet, Icons.Outlined.AccountBalanceWallet),
+    PROFILE(ProfileRoute, "Profile", Icons.Filled.Person, Icons.Outlined.Person)
 }

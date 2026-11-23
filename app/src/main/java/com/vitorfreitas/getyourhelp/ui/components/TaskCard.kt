@@ -1,49 +1,91 @@
 package com.vitorfreitas.getyourhelp.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vitorfreitas.getyourhelp.data.TaskItem
-import com.vitorfreitas.getyourhelp.data.TaskType
-import com.vitorfreitas.getyourhelp.ui.formatEuro
+import com.vitorfreitas.getyourhelp.ui.formatDateTime
+import com.vitorfreitas.getyourhelp.ui.formatRelativeTime
+import com.vitorfreitas.getyourhelp.ui.theme.AppTheme
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-/** Summary of a task in a list. Tapping it opens the task details. */
+/**
+ * Summary of a task in a list: category icon, title, area, date, what the helper gets and who posted it.
+ * [badge] is an optional label for the top-right corner, e.g. the status of the user's application.
+ */
 @Composable
-fun TaskCard(task: TaskItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    task.title,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                StatusTag(task.status)
+fun TaskCard(
+    task: TaskItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    badge: (@Composable () -> Unit)? = null
+) {
+    val secondaryText = MaterialTheme.colorScheme.onSurfaceVariant
+    Card(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppTheme.extendedColors.card),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                CategoryAvatar(task.category)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(task.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "${task.category.label} · ${task.location}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = secondaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (badge != null) {
+                    Spacer(Modifier.width(8.dp))
+                    badge()
+                }
             }
-            Spacer(Modifier.height(4.dp))
-            Text("${task.category.label} · ${task.taskType.label}", style = MaterialTheme.typography.bodySmall)
-            Text(task.location, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Schedule, contentDescription = null, tint = secondaryText, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    task.scheduledAt?.let(::formatDateTime) ?: "Flexible date",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = secondaryText,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f)
+                )
+                RewardTag(task)
+            }
+            Spacer(Modifier.height(10.dp))
+            val posted = formatRelativeTime(task.createdAt)
             Text(
-                if (task.taskType == TaskType.PAID) formatEuro(task.amount) else "Volunteer opportunity",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
+                if (posted.isEmpty()) "Posted by ${task.ownerName}" else "Posted by ${task.ownerName} · $posted",
+                style = MaterialTheme.typography.labelSmall,
+                color = secondaryText
             )
-            Text("Posted by ${task.ownerName}", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
