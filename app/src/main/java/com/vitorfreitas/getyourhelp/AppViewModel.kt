@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
+// GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
+
 /**
  * Everything the screens display, in one immutable object.
  * - user: null means signed out, so the login screen is shown

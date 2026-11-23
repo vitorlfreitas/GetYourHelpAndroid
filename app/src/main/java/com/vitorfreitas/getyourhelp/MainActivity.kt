@@ -32,6 +32,9 @@ import com.vitorfreitas.getyourhelp.data.TaskItem
 import java.text.DateFormat
 import java.util.Date
 
+// GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
+
+
 /** The app's single activity */
 class MainActivity : ComponentActivity() {
     private val viewModel: AppViewModel by viewModels()

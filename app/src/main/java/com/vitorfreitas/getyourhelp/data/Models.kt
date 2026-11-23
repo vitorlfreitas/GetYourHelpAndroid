@@ -2,6 +2,8 @@ package com.vitorfreitas.getyourhelp.data
 
 // Data classes saved in Cloud Firestore, one collection per class.
 
+// GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
+
 data class AppUser(
     val uid: String,
     val displayName: String,

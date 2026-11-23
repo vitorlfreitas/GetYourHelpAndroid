@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
+// GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
+
+
 /**
  * The only class that talks to Firebase.
  *
