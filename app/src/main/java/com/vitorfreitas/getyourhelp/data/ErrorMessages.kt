@@ -35,6 +35,21 @@ fun authErrorMessageForCode(code: String): String = when (code) {
     else -> "Something went wrong ($code). Please try again."
 }
 
+/** Message for a failed "Continue with Google". */
+fun googleAuthErrorMessage(error: Throwable): String =
+    if (error is FirebaseAuthException) googleAuthErrorMessageForCode(error.errorCode) else authErrorMessage(error)
+
+/**
+ * Like [authErrorMessageForCode], but for Google sign-in: there is no password involved, so an
+ * invalid credential means the Google token was rejected (usually the Firebase setup).
+ */
+fun googleAuthErrorMessageForCode(code: String): String = when (code) {
+    "ERROR_INVALID_CREDENTIAL" -> "Google sign-in didn't work. Please try again."
+    "ERROR_OPERATION_NOT_ALLOWED" -> "Google sign-in is not enabled for this app yet."
+    "ERROR_ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL" -> "This email already has an account. Sign in with your password instead."
+    else -> authErrorMessageForCode(code)
+}
+
 /** Message for any other failed action, such as saving or loading data. */
 fun errorMessage(error: Throwable): String = when {
     error is FirebaseFirestoreException && error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->

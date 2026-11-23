@@ -19,6 +19,10 @@ fun formatDateTime(millis: Long): String {
     return "$day, $time"
 }
 
+/** Only the time, in the phone's time format, e.g. "14:30" or "2:30 PM" (used in the chat). */
+fun formatTime(millis: Long): String =
+    DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(millis))
+
 /** How long ago something happened, e.g. "Just now", "5 min. ago" or "2 days ago". Empty if unknown. */
 fun formatRelativeTime(millis: Long, now: Long = System.currentTimeMillis()): String = when {
     millis <= 0L -> ""

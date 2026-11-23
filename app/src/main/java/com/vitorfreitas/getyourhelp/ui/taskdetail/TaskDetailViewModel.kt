@@ -1,5 +1,6 @@
 package com.vitorfreitas.getyourhelp.ui.taskdetail
 
+import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.createSavedStateHandle
@@ -31,6 +32,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * - task: the latest version of the task (null while loading, or if it no longer exists)
  * - applications: everyone who applied (only loaded for the task owner)
  * - myApplication: the signed-in helper's own application for this task, if any
+ * - hasReported: this user already reported the task (each user can report a task once)
  * - busy: an action is running, so its buttons are disabled
  */
 data class TaskDetailState(
@@ -38,12 +40,14 @@ data class TaskDetailState(
     val loading: Boolean = true,
     val applications: List<TaskApplication> = emptyList(),
     val myApplication: TaskApplication? = null,
+    val hasReported: Boolean = false,
     val busy: Boolean = false
 )
 
 /**
- * ViewModel of one task details page. All its data is live: when the other person accepts, declines or
- * applies on their phone, this page updates by itself. The task id comes from the navigation route.
+ * ViewModel of one task details page. All its data is live: when the other person accepts, declines,
+ * applies or marks the work as done on their phone, this page updates by itself. The task id comes
+ * from the navigation route.
  */
 class TaskDetailViewModel(
     private val repository: MarketplaceRepository,
@@ -77,6 +81,17 @@ class TaskDetailViewModel(
                         _state.update { it.copy(myApplication = applications.firstOrNull { app -> app.taskId == taskId }) }
                     }
             }
+            viewModelScope.launch {
+                try {
+                    val reported = repository.hasReported(taskId, userId)
+                    _state.update { it.copy(hasReported = reported) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Not critical: the report button stays visible, and the server still refuses a second report.
+                    Log.w("TaskDetail", "Could not check for an earlier report", e)
+                }
+            }
         }
     }
 
@@ -101,6 +116,14 @@ class TaskDetailViewModel(
         repository.withdrawApplication(state.value.myApplication ?: error("You have not applied for this task."))
     }
 
+    /** The accepted helper has finished the work. The requester is then asked to confirm it. */
+    fun markWorkDone() {
+        val task = state.value.task ?: return
+        runAction("Marked as done. ${task.ownerName.substringBefore(' ')} will confirm it.") {
+            repository.markWorkDone(requireTask())
+        }
+    }
+
     // ---------------------------------------------------------------- Owner actions
 
     fun accept(application: TaskApplication) = runAction("${application.helperName} is now helping with this task.") {
@@ -111,14 +134,25 @@ class TaskDetailViewModel(
         repository.declineApplication(requireTask(), application)
     }
 
-    fun complete(owner: AppUser) = runAction("Task completed. You can now review each other.") {
+    fun cancelTask() = runAction("Task cancelled. It no longer appears in Browse.") {
+        repository.cancelTask(requireTask())
+    }
+
+    /** The requester confirms the work the helper marked as done. */
+    fun confirmCompleted(owner: AppUser) = runAction("Task completed. You can now review each other.") {
         repository.completeTask(requireTask(), owner)
+    }
+
+    /** The requester says the work isn't finished, so the task goes back to the helper. */
+    fun markWorkNotFinished() = runAction("The helper can now finish the work and mark it as done again.") {
+        repository.markWorkNotFinished(requireTask())
     }
 
     // ---------------------------------------------------------------- Both
 
     fun report(user: AppUser, reason: String, details: String) = runAction("Report sent. Thank you, we'll review it.") {
         repository.reportTask(requireTask(), user, reason, details)
+        _state.update { it.copy(hasReported = true) }
     }
 
     fun review(user: AppUser, rating: Int, comment: String) = runAction("Review submitted. Thank you!") {

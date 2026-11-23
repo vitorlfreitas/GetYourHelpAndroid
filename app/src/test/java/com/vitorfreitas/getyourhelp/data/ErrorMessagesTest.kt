@@ -1,6 +1,8 @@
 package com.vitorfreitas.getyourhelp.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -22,5 +24,19 @@ class ErrorMessagesTest {
     @Test
     fun unknownCodeIsIncludedToHelpDebugging() {
         assertTrue(authErrorMessageForCode("ERROR_SOMETHING_NEW").contains("ERROR_SOMETHING_NEW"))
+    }
+
+    @Test
+    fun googleSignInNeverTalksAboutAPassword() {
+        // With Google there is no password, so "Wrong email or password." would be confusing
+        val message = googleAuthErrorMessageForCode("ERROR_INVALID_CREDENTIAL")
+        assertNotEquals(authErrorMessageForCode("ERROR_INVALID_CREDENTIAL"), message)
+        assertFalse(message.contains("password"))
+        assertTrue(googleAuthErrorMessageForCode("ERROR_OPERATION_NOT_ALLOWED").contains("Google"))
+    }
+
+    @Test
+    fun otherGoogleErrorsUseTheUsualMessages() {
+        assertEquals(authErrorMessageForCode("ERROR_USER_DISABLED"), googleAuthErrorMessageForCode("ERROR_USER_DISABLED"))
     }
 }

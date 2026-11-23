@@ -29,14 +29,17 @@ import com.vitorfreitas.getyourhelp.ui.theme.AppTheme
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Summary of a task in a list: category icon, title, area, date, what the helper gets and who posted it.
- * [badge] is an optional label for the top-right corner, e.g. the status of the user's application.
+ * Summary of a task in a list: category icon, title, area, date, how far away it is, what the
+ * helper gets and who posted it.
+ * - [distanceKm]: distance from the user, shown as "1.2 km away" (null hides it, e.g. location unknown)
+ * - [badge]: optional label for the top-right corner, e.g. the status of the user's application
  */
 @Composable
 fun TaskCard(
     task: TaskItem,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    distanceKm: Double? = null,
     badge: (@Composable () -> Unit)? = null
 ) {
     val secondaryText = MaterialTheme.colorScheme.onSurfaceVariant
@@ -75,8 +78,14 @@ fun TaskCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = secondaryText,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
+                if (distanceKm != null) {
+                    Spacer(Modifier.width(6.dp))
+                    DistancePill(distanceKm)
+                }
+                Spacer(Modifier.width(6.dp))
                 RewardTag(task)
             }
             Spacer(Modifier.height(10.dp))

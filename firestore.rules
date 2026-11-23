@@ -30,34 +30,90 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
     }
 
+    // A task's position is optional (null when unknown). When present it must be a map point
+    function validCoordinates(data) {
+      return data.get('coordinates', null) == null || data.coordinates is latlng;
+    }
+
     // Users can only read and write their own profile
     match /users/{uid} {
       allow create, read, update: if signedIn() && request.auth.uid == uid;
       allow delete: if false;
     }
 
-    // Any signed-in user can read tasks. Only the owner can create one, and its status only moves forward:
-    // OPEN -> ASSIGNED (in the same write that accepts the helper's application) -> COMPLETED
+    // Any signed-in user can read tasks. Only the owner can create one. The status only moves forward:
+    // OPEN -> ASSIGNED (in the same write that accepts the helper's application) -> COMPLETED,
+    // or OPEN -> CANCELLED. Completing takes two steps: the helper marks the work as done, then the owner confirms.
     match /tasks/{taskId} {
+      function isOwner() {
+        return signedIn() && resource.data.ownerId == request.auth.uid;
+      }
+
+      function isAssignedHelper() {
+        return signedIn() && resource.data.assignedHelperId == request.auth.uid;
+      }
+
+      function statusChange(from, to) {
+        return resource.data.status == from && request.resource.data.status == to;
+      }
+
+      function workMarkedDone() {
+        return resource.data.get('workDoneAt', null) != null;
+      }
+
       allow read: if signedIn();
       allow create: if signedIn()
         && request.resource.data.ownerId == request.auth.uid
         && request.resource.data.status == 'OPEN'
-        && request.resource.data.assignedHelperId == '';
-      allow update: if signedIn() && resource.data.ownerId == request.auth.uid && (
-        // Assign a helper: only allowed if, after this write, that helper's application is ACCEPTED
-        (resource.data.status == 'OPEN'
-          && request.resource.data.status == 'ASSIGNED'
+        && request.resource.data.assignedHelperId == ''
+        && validCoordinates(request.resource.data);
+      allow update: if
+        // The owner edits an open task. The status, owner and helper fields cannot be changed this way
+        (isOwner() && statusChange('OPEN', 'OPEN')
+          && onlyChanges(['title', 'description', 'category', 'taskType', 'amount', 'acceptedPaymentMethods',
+                          'location', 'coordinates', 'scheduledAt', 'editedAt'])
+          && validCoordinates(request.resource.data))
+        ||
+        // The owner cancels an open task
+        (isOwner() && statusChange('OPEN', 'CANCELLED') && onlyChanges(['status']))
+        ||
+        // The owner assigns a helper: only allowed if, after this write, that helper's application is ACCEPTED
+        (isOwner() && statusChange('OPEN', 'ASSIGNED')
           && onlyChanges(['status', 'assignedHelperId', 'assignedHelperName', 'agreedPaymentMethod'])
           && getAfter(/databases/$(database)/documents/applications/$(taskId + '_' + request.resource.data.assignedHelperId)).data.status == 'ACCEPTED')
         ||
-        // Confirm the work is done
-        (resource.data.status == 'ASSIGNED'
-          && request.resource.data.status == 'COMPLETED'
-          && onlyChanges(['status']))
-      );
-      allow delete: if signedIn() && resource.data.ownerId == request.auth.uid
-        && resource.data.status == 'OPEN';
+        // The assigned helper marks the work as done
+        (isAssignedHelper() && statusChange('ASSIGNED', 'ASSIGNED') && !workMarkedDone()
+          && onlyChanges(['workDoneAt']) && request.resource.data.workDoneAt is int)
+        ||
+        // The owner says the work is not finished yet, which removes the helper's "done" mark
+        (isOwner() && statusChange('ASSIGNED', 'ASSIGNED') && workMarkedDone()
+          && onlyChanges(['workDoneAt']) && request.resource.data.workDoneAt == null)
+        ||
+        // The owner confirms the work is done, after the helper marked it as done
+        (isOwner() && statusChange('ASSIGNED', 'COMPLETED') && workMarkedDone() && onlyChanges(['status']));
+      allow delete: if isOwner() && resource.data.status == 'OPEN';
+
+      // The task's chat. Only the requester and the accepted helper can read it, and they can only
+      // write while the task is ongoing (read-only once completed). Messages cannot be edited or deleted
+      match /messages/{messageId} {
+        function chatMember() {
+          let task = taskData(taskId);
+          return signedIn() && task.assignedHelperId != ''
+            && (request.auth.uid == task.ownerId || request.auth.uid == task.assignedHelperId);
+        }
+
+        allow read: if chatMember();
+        allow create: if chatMember()
+          && taskData(taskId).status == 'ASSIGNED'
+          && request.resource.data.keys().hasOnly(['senderId', 'senderName', 'text', 'sentAt'])
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 1000
+          && request.resource.data.sentAt == request.time;
+        allow update, delete: if false;
+      }
     }
 
     // Applications are visible to the helper who sent them and to the task owner.
@@ -121,12 +177,16 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Any signed-in user can report an existing task. Reports cannot be edited or deleted
+    // One report per user per task: the document id is "<taskId>_<reporterId>", and an existing
+    // report cannot be overwritten. A user can check whether they already reported a task (get by id),
+    // but cannot list or read other people's reports. Reports cannot be edited or deleted
     match /reports/{reportId} {
-      allow create: if signedIn() && request.resource.data.reporterId == request.auth.uid
+      allow get: if signedIn() && reportId.matches('.+_' + request.auth.uid);
+      allow create: if signedIn()
+        && reportId == request.resource.data.taskId + '_' + request.auth.uid
+        && request.resource.data.reporterId == request.auth.uid
         && taskExists(request.resource.data.taskId);
-      allow read: if signedIn() && resource.data.reporterId == request.auth.uid;
-      allow update, delete: if false;
+      allow list, update, delete: if false;
     }
 
     // Reviews (rating 1-5) can only be written for a COMPLETED task

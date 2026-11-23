@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Inbox
@@ -35,11 +36,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.vitorfreitas.getyourhelp.data.AppUser
+import com.vitorfreitas.getyourhelp.data.Coordinates
 import com.vitorfreitas.getyourhelp.data.TaskApplication
 import com.vitorfreitas.getyourhelp.data.TaskItem
+import com.vitorfreitas.getyourhelp.data.TaskStatus
+import com.vitorfreitas.getyourhelp.location.distanceKmOrNull
 import com.vitorfreitas.getyourhelp.ui.components.ApplicationStatusChip
 import com.vitorfreitas.getyourhelp.ui.components.EmptyState
 import com.vitorfreitas.getyourhelp.ui.components.TaskCard
+import com.vitorfreitas.getyourhelp.ui.components.TaskStatusChip
+import com.vitorfreitas.getyourhelp.ui.components.WorkDonePill
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
@@ -47,9 +53,10 @@ private enum class MyTasksTab(val label: String) { REQUESTED("Requested"), HELPI
 
 /**
  * The user's tasks in two tabs, as described in the proposal:
- * - Requested: tasks the user posted, as Open / Ongoing / Completed
+ * - Requested: tasks the user posted, as Open / Ongoing / Completed (and Cancelled, once there are any)
  * - Helping: tasks the user applied to, as Applied / Ongoing / Completed
- * The lists are live, so a task moves to Ongoing as soon as a helper is accepted.
+ * The lists are live, so a task moves to Ongoing as soon as a helper is accepted. An ongoing task
+ * shows "Work done" once the helper has marked it, until the requester confirms.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,6 +64,7 @@ fun MyTasksScreen(
     tasks: List<TaskItem>,
     applications: List<TaskApplication>,
     user: AppUser,
+    myLocation: Coordinates?,
     onOpenTask: (TaskItem) -> Unit,
     onCreateTask: () -> Unit
 ) {
@@ -80,9 +88,16 @@ fun MyTasksScreen(
             }
             when (tab) {
                 MyTasksTab.REQUESTED -> {
+                    // The Cancelled group only appears once the user has cancelled a task
+                    val hasCancelled = requested.getValue(TaskStage.CANCELLED).isNotEmpty() || requestedStage == TaskStage.CANCELLED
                     StageChips(
                         selected = requestedStage,
-                        labels = mapOf(TaskStage.WAITING to "Open", TaskStage.ONGOING to "Ongoing", TaskStage.COMPLETED to "Completed"),
+                        labels = buildMap {
+                            put(TaskStage.WAITING, "Open")
+                            put(TaskStage.ONGOING, "Ongoing")
+                            put(TaskStage.COMPLETED, "Completed")
+                            if (hasCancelled) put(TaskStage.CANCELLED, "Cancelled")
+                        },
                         counts = requested.mapValues { it.value.size },
                         onSelect = { requestedStage = it }
                     )
@@ -90,7 +105,14 @@ fun MyTasksScreen(
                     if (list.isEmpty()) {
                         RequestedEmptyState(requestedStage, onCreateTask)
                     } else {
-                        CardList(list, key = { it.id }) { task -> TaskCard(task, onClick = { onOpenTask(task) }) }
+                        CardList(list, key = { it.id }) { task ->
+                            TaskCard(
+                                task,
+                                onClick = { onOpenTask(task) },
+                                // The helper says the work is done: the requester needs to confirm it
+                                badge = if (task.workDoneAt != null && task.status == TaskStatus.ASSIGNED) { { WorkDonePill() } } else null
+                            )
+                        }
                     }
                 }
                 MyTasksTab.HELPING -> {
@@ -105,12 +127,11 @@ fun MyTasksScreen(
                         HelpingEmptyState(helpingStage)
                     } else {
                         CardList(list, key = { it.task.id }) { item ->
-                            // In "Applied", show what happened to each application
-                            val status = item.displayStatus.takeIf { helpingStage == TaskStage.WAITING }
                             TaskCard(
                                 item.task,
                                 onClick = { onOpenTask(item.task) },
-                                badge = if (status != null) { { ApplicationStatusChip(status) } } else null
+                                distanceKm = distanceKmOrNull(myLocation, item.task.coordinates),
+                                badge = helpingBadge(item, helpingStage)
                             )
                         }
                     }
@@ -120,7 +141,22 @@ fun MyTasksScreen(
     }
 }
 
-/** The Open / Ongoing / Completed filter, with the number of tasks in each group. */
+/**
+ * The badge on a Helping card:
+ * - Applied: what happened to the application, or "Cancelled" if the requester cancelled the task
+ * - Ongoing: "Work done" once the user has marked it, while the requester has not confirmed yet
+ */
+private fun helpingBadge(item: HelpingItem, stage: TaskStage): (@Composable () -> Unit)? {
+    val status = item.displayStatus
+    return when {
+        stage == TaskStage.WAITING && item.taskCancelled -> { { TaskStatusChip(TaskStatus.CANCELLED) } }
+        stage == TaskStage.WAITING && status != null -> { { ApplicationStatusChip(status) } }
+        stage == TaskStage.ONGOING && item.task.workDoneAt != null -> { { WorkDonePill() } }
+        else -> null
+    }
+}
+
+/** The Open / Ongoing / Completed filter, with the number of tasks in each group. Only the stages in [labels] are shown. */
 @Composable
 private fun StageChips(
     selected: TaskStage,
@@ -132,7 +168,7 @@ private fun StageChips(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        TaskStage.entries.forEach { stage ->
+        TaskStage.entries.filter { it in labels }.forEach { stage ->
             FilterChip(
                 selected = stage == selected,
                 onClick = { onSelect(stage) },
@@ -159,6 +195,7 @@ private fun RequestedEmptyState(stage: TaskStage, onCreateTask: () -> Unit) {
         TaskStage.WAITING -> Triple(Icons.Outlined.Inbox, "No open tasks", "Post a task and people nearby can apply to help.")
         TaskStage.ONGOING -> Triple(Icons.Outlined.HourglassEmpty, "Nothing in progress", "When you accept a helper, the task moves here.")
         TaskStage.COMPLETED -> Triple(Icons.Outlined.CheckCircle, "No completed tasks yet", "Tasks you confirm as done appear here.")
+        TaskStage.CANCELLED -> Triple(Icons.Outlined.Block, "No cancelled tasks", "Tasks you cancel appear here.")
     }
     EmptyState(
         title = title,
@@ -173,7 +210,7 @@ private fun RequestedEmptyState(stage: TaskStage, onCreateTask: () -> Unit) {
 @Composable
 private fun HelpingEmptyState(stage: TaskStage) {
     val (icon: ImageVector, title, message) = when (stage) {
-        TaskStage.WAITING -> Triple(Icons.Outlined.Search, "No applications", "Find a task in Browse and apply to help.")
+        TaskStage.WAITING, TaskStage.CANCELLED -> Triple(Icons.Outlined.Search, "No applications", "Find a task in Browse and apply to help.")
         TaskStage.ONGOING -> Triple(Icons.Outlined.HourglassEmpty, "No ongoing tasks", "When a requester accepts you, the task appears here.")
         TaskStage.COMPLETED -> Triple(Icons.Outlined.CheckCircle, "No completed tasks yet", "Tasks you've finished helping with appear here.")
     }

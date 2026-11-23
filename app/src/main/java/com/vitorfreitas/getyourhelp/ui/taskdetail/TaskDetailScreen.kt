@@ -19,17 +19,23 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EmojiPeople
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.HourglassEmpty
+import androidx.compose.material.icons.outlined.HourglassTop
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.RateReview
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -61,11 +67,14 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.vitorfreitas.getyourhelp.data.ApplicationStatus
 import com.vitorfreitas.getyourhelp.data.AppUser
+import com.vitorfreitas.getyourhelp.data.Coordinates
 import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.TaskApplication
 import com.vitorfreitas.getyourhelp.data.TaskItem
 import com.vitorfreitas.getyourhelp.data.TaskStatus
 import com.vitorfreitas.getyourhelp.data.TaskType
+import com.vitorfreitas.getyourhelp.location.distanceKmOrNull
+import com.vitorfreitas.getyourhelp.location.formatDistance
 import com.vitorfreitas.getyourhelp.ui.components.ApplicationStatusChip
 import com.vitorfreitas.getyourhelp.ui.components.CategoryAvatar
 import com.vitorfreitas.getyourhelp.ui.components.ConfirmDialog
@@ -75,6 +84,7 @@ import com.vitorfreitas.getyourhelp.ui.components.InitialsAvatar
 import com.vitorfreitas.getyourhelp.ui.components.LoadingIndicator
 import com.vitorfreitas.getyourhelp.ui.components.RewardTag
 import com.vitorfreitas.getyourhelp.ui.components.TaskStatusChip
+import com.vitorfreitas.getyourhelp.ui.components.WorkDonePill
 import com.vitorfreitas.getyourhelp.ui.formatDateTime
 import com.vitorfreitas.getyourhelp.ui.formatEuro
 import com.vitorfreitas.getyourhelp.ui.formatRelativeTime
@@ -83,34 +93,43 @@ import com.vitorfreitas.getyourhelp.validation.TaskValidator
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
+/** What the buttons on the task details page do. AppNavHost connects them to the ViewModel and navigation. */
+class TaskDetailActions(
+    val onBack: () -> Unit,
+    val onApply: (method: PaymentMethod?, message: String) -> Unit,
+    val onWithdraw: () -> Unit,
+    val onAccept: (TaskApplication) -> Unit,
+    val onDecline: (TaskApplication) -> Unit,
+    val onEdit: () -> Unit,
+    val onCancelTask: () -> Unit,
+    val onMarkWorkDone: () -> Unit,
+    val onConfirmCompleted: () -> Unit,
+    val onWorkNotFinished: () -> Unit,
+    val onOpenChat: () -> Unit,
+    val onOpenMaps: (TaskItem) -> Unit,
+    val onReport: (reason: String, details: String) -> Unit,
+    val onReview: (rating: Int, comment: String) -> Unit
+)
+
 /**
  * Full-page task details. What the page offers depends on who is looking and on the task status:
- * - owner, OPEN: the live list of applications, each with Accept and Decline
- * - owner, ONGOING: "Confirm task completed"
+ * - owner, OPEN: edit or cancel the task, and the live list of applications with Accept and Decline
  * - helper, OPEN: apply (payment method + optional message), or withdraw a pending application
+ * - accepted helper, ONGOING: "Mark work as done"; then the owner confirms (or says it isn't finished)
+ * - owner and accepted helper, ONGOING or COMPLETED: the chat (read-only once completed)
  * - owner or accepted helper, COMPLETED: "Leave a review"
- * - anyone except the owner: "Report this task"
+ * - anyone except the owner: "Report this task", once
+ * The location has an "Open in Maps" button and, if the user's position is known, the distance.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TaskDetailScreen(
-    state: TaskDetailState,
-    user: AppUser,
-    onBack: () -> Unit,
-    onApply: (method: PaymentMethod?, message: String) -> Unit,
-    onWithdraw: () -> Unit,
-    onAccept: (TaskApplication) -> Unit,
-    onDecline: (TaskApplication) -> Unit,
-    onComplete: () -> Unit,
-    onReport: (reason: String, details: String) -> Unit,
-    onReview: (rating: Int, comment: String) -> Unit
-) {
+fun TaskDetailScreen(state: TaskDetailState, user: AppUser, myLocation: Coordinates?, actions: TaskDetailActions) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Task details") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                    IconButton(onClick = actions.onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                 }
             )
         }
@@ -118,10 +137,7 @@ fun TaskDetailScreen(
         val contentModifier = Modifier.padding(padding).consumeWindowInsets(padding)
         val task = state.task
         when {
-            task != null -> TaskDetailContent(
-                task, state, user, onApply, onWithdraw, onAccept, onDecline, onComplete, onReport, onReview,
-                modifier = contentModifier
-            )
+            task != null -> TaskDetailContent(task, state, user, myLocation, actions, modifier = contentModifier)
             state.loading -> LoadingIndicator(contentModifier)
             else -> EmptyState(
                 title = "Task not available",
@@ -138,13 +154,8 @@ private fun TaskDetailContent(
     task: TaskItem,
     state: TaskDetailState,
     user: AppUser,
-    onApply: (PaymentMethod?, String) -> Unit,
-    onWithdraw: () -> Unit,
-    onAccept: (TaskApplication) -> Unit,
-    onDecline: (TaskApplication) -> Unit,
-    onComplete: () -> Unit,
-    onReport: (String, String) -> Unit,
-    onReview: (Int, String) -> Unit,
+    myLocation: Coordinates?,
+    actions: TaskDetailActions,
     modifier: Modifier = Modifier
 ) {
     val isOwner = task.ownerId == user.uid
@@ -152,6 +163,9 @@ private fun TaskDetailContent(
     var showReport by rememberSaveable { mutableStateOf(false) }
     var showReview by rememberSaveable { mutableStateOf(false) }
     var confirmComplete by rememberSaveable { mutableStateOf(false) }
+    var confirmNotFinished by rememberSaveable { mutableStateOf(false) }
+    var confirmWorkDone by rememberSaveable { mutableStateOf(false) }
+    var confirmCancel by rememberSaveable { mutableStateOf(false) }
     var applicationToAccept by remember { mutableStateOf<TaskApplication?>(null) }
 
     Column(
@@ -173,6 +187,7 @@ private fun TaskDetailContent(
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TaskStatusChip(task.status)
+            if (task.status == TaskStatus.ASSIGNED && task.workDoneAt != null) WorkDonePill()
             RewardTag(task)
         }
         Spacer(Modifier.height(16.dp))
@@ -180,15 +195,29 @@ private fun TaskDetailContent(
         // Key facts
         Card(colors = CardDefaults.cardColors(containerColor = AppTheme.extendedColors.card), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                InfoRow(Icons.Outlined.Place, "Location", task.location)
+                val distance = distanceKmOrNull(myLocation, task.coordinates)
+                InfoRow(
+                    Icons.Outlined.Place,
+                    "Location",
+                    task.location,
+                    supporting = distance?.let { "${formatDistance(it)} from you" },
+                    trailing = {
+                        TextButton(onClick = { actions.onOpenMaps(task) }) {
+                            Icon(Icons.Outlined.Map, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Open in Maps")
+                        }
+                    }
+                )
                 InfoRow(Icons.Outlined.Schedule, "When", task.scheduledAt?.let(::formatDateTime) ?: "Flexible, to be agreed")
                 InfoRow(Icons.Outlined.Payments, "Payment", paymentDescription(task))
                 InfoRow(Icons.Outlined.Person, "Requester", if (isOwner) "${task.ownerName} (you)" else task.ownerName)
-                if (task.status != TaskStatus.OPEN) {
+                if (task.assignedHelperId.isNotEmpty()) {
                     InfoRow(Icons.Outlined.EmojiPeople, "Helper", if (isHelper) "${task.assignedHelperName} (you)" else task.assignedHelperName)
                 }
                 val posted = formatRelativeTime(task.createdAt)
-                if (posted.isNotEmpty()) InfoRow(Icons.Outlined.History, "Posted", posted)
+                val edited = task.editedAt?.let { " · edited ${formatRelativeTime(it)}" }.orEmpty()
+                if (posted.isNotEmpty()) InfoRow(Icons.Outlined.History, "Posted", posted + edited)
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -203,11 +232,24 @@ private fun TaskDetailContent(
                 applications = state.applications,
                 busy = state.busy,
                 onAccept = { applicationToAccept = it },
-                onDecline = onDecline,
-                onComplete = { confirmComplete = true }
+                onDecline = actions.onDecline,
+                onEdit = actions.onEdit,
+                onCancel = { confirmCancel = true },
+                onConfirmCompleted = { confirmComplete = true },
+                onNotFinished = { confirmNotFinished = true },
+                onOpenChat = actions.onOpenChat
             )
         } else {
-            HelperSection(task, state.myApplication, isHelper, state.busy, onApply, onWithdraw)
+            HelperSection(
+                task = task,
+                myApplication = state.myApplication,
+                isHelper = isHelper,
+                busy = state.busy,
+                onApply = actions.onApply,
+                onWithdraw = actions.onWithdraw,
+                onMarkWorkDone = { confirmWorkDone = true },
+                onOpenChat = actions.onOpenChat
+            )
         }
 
         if (task.status == TaskStatus.COMPLETED && (isOwner || isHelper)) {
@@ -220,13 +262,27 @@ private fun TaskDetailContent(
         }
         if (!isOwner) {
             Spacer(Modifier.height(8.dp))
-            TextButton(
-                onClick = { showReport = true },
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) {
-                Icon(Icons.Outlined.Flag, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Report this task")
+            if (state.hasReported) {
+                // Each user can report a task only once
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Flag, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "You reported this task. Thank you, we'll review it.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                TextButton(
+                    onClick = { showReport = true },
+                    enabled = !state.busy,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Outlined.Flag, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Report this task")
+                }
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -235,30 +291,59 @@ private fun TaskDetailContent(
     applicationToAccept?.let { application ->
         ConfirmDialog(
             title = "Accept ${application.helperName}?",
-            message = "They become the helper for this task, and the other pending applications are declined.",
+            message = "They become the helper for this task, and the other pending applications are declined. You can then chat with them.",
             confirmLabel = "Accept",
-            onConfirm = { onAccept(application) },
+            onConfirm = { actions.onAccept(application) },
             onDismiss = { applicationToAccept = null }
+        )
+    }
+    if (confirmCancel) {
+        ConfirmDialog(
+            title = "Cancel this task?",
+            message = "It disappears from Browse and nobody can apply any more. People who applied will see that it was cancelled. This can't be undone.",
+            confirmLabel = "Cancel task",
+            dismissLabel = "Keep it",
+            destructive = true,
+            onConfirm = actions.onCancelTask,
+            onDismiss = { confirmCancel = false }
+        )
+    }
+    if (confirmWorkDone) {
+        ConfirmDialog(
+            title = "Is the work finished?",
+            message = "${task.ownerName.substringBefore(' ')} will be asked to confirm it. Then you can review each other.",
+            confirmLabel = "Mark as done",
+            onConfirm = actions.onMarkWorkDone,
+            onDismiss = { confirmWorkDone = false }
         )
     }
     if (confirmComplete) {
         ConfirmDialog(
-            title = "Is the task done?",
-            message = "The task moves to Completed and you can review each other.",
+            title = "Confirm the task is done?",
+            message = "The task moves to Completed, the chat becomes read-only, and you can review each other.",
             confirmLabel = "Confirm",
-            onConfirm = onComplete,
+            onConfirm = actions.onConfirmCompleted,
             onDismiss = { confirmComplete = false }
+        )
+    }
+    if (confirmNotFinished) {
+        ConfirmDialog(
+            title = "Not finished yet?",
+            message = "The task stays ongoing and ${task.assignedHelperName.substringBefore(' ')} can mark it as done again. Use the chat to explain what is missing.",
+            confirmLabel = "Not finished",
+            onConfirm = actions.onWorkNotFinished,
+            onDismiss = { confirmNotFinished = false }
         )
     }
     if (showReport) {
         ReportTaskDialog(
-            onSubmit = { reason, details -> onReport(reason, details); showReport = false },
+            onSubmit = { reason, details -> actions.onReport(reason, details); showReport = false },
             onDismiss = { showReport = false }
         )
     }
     if (showReview) {
         ReviewDialog(
-            onSubmit = { rating, comment -> onReview(rating, comment); showReview = false },
+            onSubmit = { rating, comment -> actions.onReview(rating, comment); showReview = false },
             onDismiss = { showReview = false }
         )
     }
@@ -279,10 +364,33 @@ private fun OwnerSection(
     busy: Boolean,
     onAccept: (TaskApplication) -> Unit,
     onDecline: (TaskApplication) -> Unit,
-    onComplete: () -> Unit
+    onEdit: () -> Unit,
+    onCancel: () -> Unit,
+    onConfirmCompleted: () -> Unit,
+    onNotFinished: () -> Unit,
+    onOpenChat: () -> Unit
 ) {
+    val helperFirstName = task.assignedHelperName.substringBefore(' ')
     when (task.status) {
         TaskStatus.OPEN -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onEdit, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Edit task")
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    enabled = !busy,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Outlined.Block, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Cancel task")
+                }
+            }
+            Spacer(Modifier.height(20.dp))
             Text("Applications (${applications.size})", style = MaterialTheme.typography.titleMedium)
             Text(
                 if (applications.isEmpty()) "No one has applied yet. New applications appear here straight away."
@@ -296,13 +404,36 @@ private fun OwnerSection(
                 Spacer(Modifier.height(8.dp))
             }
         }
-        TaskStatus.ASSIGNED -> NoticeCard(
-            icon = Icons.Outlined.EmojiPeople,
-            title = "${task.assignedHelperName} is helping you",
-            text = "When the work is done, confirm it here. You can then review each other."
-        ) {
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = onComplete, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Confirm task completed") }
+        TaskStatus.ASSIGNED -> if (task.workDoneAt == null) {
+            NoticeCard(
+                icon = Icons.Outlined.EmojiPeople,
+                title = "${task.assignedHelperName} is helping you",
+                text = "When the work is finished, $helperFirstName marks it as done and you confirm it here. " +
+                    "Use the chat to share the exact address and agree on the details."
+            ) {
+                Spacer(Modifier.height(12.dp))
+                ChatButton("Message $helperFirstName", onOpenChat)
+            }
+        } else {
+            NoticeCard(
+                icon = Icons.Outlined.TaskAlt,
+                title = "$helperFirstName says the work is done",
+                text = "Marked as done ${formatRelativeTime(task.workDoneAt)}. If everything is as agreed, confirm it. You can then review each other.",
+                containerColor = AppTheme.extendedColors.successContainer,
+                contentColor = AppTheme.extendedColors.onSuccessContainer
+            ) {
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onConfirmCompleted, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Confirm completion") }
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = onNotFinished, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Not finished yet") }
+                    TextButton(onClick = onOpenChat, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Chat")
+                    }
+                }
+            }
         }
         TaskStatus.COMPLETED -> NoticeCard(
             icon = Icons.Outlined.CheckCircle,
@@ -310,6 +441,16 @@ private fun OwnerSection(
             text = "${task.assignedHelperName} helped you with this task.",
             containerColor = AppTheme.extendedColors.successContainer,
             contentColor = AppTheme.extendedColors.onSuccessContainer
+        ) {
+            Spacer(Modifier.height(12.dp))
+            ChatButton("View chat", onOpenChat)
+        }
+        TaskStatus.CANCELLED -> NoticeCard(
+            icon = Icons.Outlined.Block,
+            title = "Task cancelled",
+            text = "You cancelled this task. It no longer appears in Browse and nobody can apply.",
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface
         )
     }
 }
@@ -363,28 +504,55 @@ private fun HelperSection(
     isHelper: Boolean,
     busy: Boolean,
     onApply: (PaymentMethod?, String) -> Unit,
-    onWithdraw: () -> Unit
+    onWithdraw: () -> Unit,
+    onMarkWorkDone: () -> Unit,
+    onOpenChat: () -> Unit
 ) {
     val extended = AppTheme.extendedColors
+    val ownerFirstName = task.ownerName.substringBefore(' ')
     when {
-        isHelper && task.status == TaskStatus.ASSIGNED -> NoticeCard(
+        task.status == TaskStatus.CANCELLED -> NoticeCard(
+            icon = Icons.Outlined.Block,
+            title = "Task cancelled",
+            text = "${task.ownerName} cancelled this task, so it's no longer taking applications.",
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
+        isHelper && task.status == TaskStatus.ASSIGNED && task.workDoneAt == null -> NoticeCard(
             icon = Icons.Outlined.CheckCircle,
             title = "You're helping with this task",
             text = buildString {
                 append("${task.ownerName} accepted your application.")
                 task.agreedPaymentMethod?.let { append(" Agreed payment: ${formatEuro(task.amount)} by ${it.label.lowercase()}.") }
-                append(" The requester confirms when the work is done.")
+                append(" When you've finished, mark the work as done and $ownerFirstName will confirm it.")
             },
             containerColor = extended.successContainer,
             contentColor = extended.onSuccessContainer
-        )
+        ) {
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onMarkWorkDone, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Mark work as done") }
+            Spacer(Modifier.height(8.dp))
+            ChatButton("Message $ownerFirstName", onOpenChat)
+        }
+        isHelper && task.status == TaskStatus.ASSIGNED -> NoticeCard(
+            icon = Icons.Outlined.HourglassTop,
+            title = "Waiting for $ownerFirstName to confirm",
+            text = "You marked the work as done ${task.workDoneAt?.let(::formatRelativeTime).orEmpty()}. " +
+                "Once $ownerFirstName confirms it, you can review each other."
+        ) {
+            Spacer(Modifier.height(12.dp))
+            ChatButton("Message $ownerFirstName", onOpenChat)
+        }
         isHelper && task.status == TaskStatus.COMPLETED -> NoticeCard(
             icon = Icons.Outlined.CheckCircle,
             title = "Task completed",
             text = "${task.ownerName} confirmed the work is done. Thank you for helping!",
             containerColor = extended.successContainer,
             contentColor = extended.onSuccessContainer
-        )
+        ) {
+            Spacer(Modifier.height(12.dp))
+            ChatButton("View chat", onOpenChat)
+        }
         task.status != TaskStatus.OPEN -> NoticeCard(
             icon = Icons.Outlined.Info,
             title = "No longer taking applications",
@@ -412,6 +580,16 @@ private fun HelperSection(
             text = "${task.ownerName} decided not to go ahead with your application. Other tasks are waiting in Browse!"
         )
         else -> ApplyForm(task, busy, applyingAgain = myApplication?.status == ApplicationStatus.WITHDRAWN, onApply)
+    }
+}
+
+/** Opens the task's chat. */
+@Composable
+private fun ChatButton(label: String, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label)
     }
 }
 

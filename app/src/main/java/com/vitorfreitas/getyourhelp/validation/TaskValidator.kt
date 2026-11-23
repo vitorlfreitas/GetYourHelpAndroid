@@ -2,12 +2,14 @@ package com.vitorfreitas.getyourhelp.validation
 
 import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.TaskCategory
+import com.vitorfreitas.getyourhelp.data.TaskItem
 import com.vitorfreitas.getyourhelp.data.TaskType
 import java.math.BigDecimal
+import java.math.RoundingMode
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-/** What the user entered in the Create Task form, before it is checked. */
+/** What the user entered in the task form (Post a task, or Edit task), before it is checked. */
 data class TaskInput(
     val title: String,
     val description: String,
@@ -18,7 +20,28 @@ data class TaskInput(
     val paymentMethods: Set<PaymentMethod>,
     /** Expected date and time (epoch milliseconds), or null when the date is flexible. */
     val scheduledAt: Long?
-)
+) {
+    companion object {
+        /** The starting values of the form when posting a new task. */
+        val Empty = TaskInput(
+            title = "", description = "", category = TaskCategory.PET_CARE, location = "",
+            type = TaskType.PAID, amount = "", paymentMethods = setOf(PaymentMethod.CASH), scheduledAt = null
+        )
+
+        /** The form filled in with an existing task, for editing it. */
+        fun from(task: TaskItem) = TaskInput(
+            title = task.title,
+            description = task.description,
+            category = task.category,
+            location = task.location,
+            type = task.taskType,
+            amount = if (task.taskType == TaskType.PAID) TaskValidator.amountText(task.amount) else "",
+            // A volunteer task has no methods. Cash is pre-ticked in case the requester switches to paid.
+            paymentMethods = task.acceptedPaymentMethods.toSet().ifEmpty { setOf(PaymentMethod.CASH) },
+            scheduledAt = task.scheduledAt
+        )
+    }
+}
 
 /** The result of checking a [TaskInput]: one message per invalid field (null = fine). */
 data class TaskValidation(
@@ -89,6 +112,25 @@ object TaskValidator {
         )
     }
 
+    /**
+     * True if two forms describe the same task, ignoring differences that are not saved: spaces
+     * around the text, how the amount is written ("15" or "15.00"), and payment details of a volunteer task.
+     */
+    fun sameTask(a: TaskInput, b: TaskInput): Boolean {
+        val amountA = parseAmount(a.amount)
+        val amountB = parseAmount(b.amount)
+        // compareTo ignores the scale, so 15 and 15.00 are equal
+        val sameAmount = if (amountA == null || amountB == null) amountA == amountB else amountA.compareTo(amountB) == 0
+        val samePayment = a.type != TaskType.PAID || (sameAmount && a.paymentMethods == b.paymentMethods)
+        return a.title.trim() == b.title.trim() &&
+            a.description.trim() == b.description.trim() &&
+            a.category == b.category &&
+            a.location.trim() == b.location.trim() &&
+            a.scheduledAt == b.scheduledAt &&
+            a.type == b.type &&
+            samePayment
+    }
+
     /** Checks the optional message a helper sends with an application. */
     fun applicationMessage(message: String): String? =
         if (message.trim().length > APPLICATION_MESSAGE_MAX) "Use at most $APPLICATION_MESSAGE_MAX characters." else null
@@ -99,6 +141,12 @@ object TaskValidator {
      */
     fun parseAmount(text: String): BigDecimal? =
         text.trim().replace(',', '.').takeIf { it.matches(Regex("\\d+(\\.\\d*)?|\\.\\d+")) }?.toBigDecimalOrNull()
+
+    /** An amount the way a user would type it, the opposite of [parseAmount]: 15.0 -> "15", 12.5 -> "12.50". */
+    fun amountText(amount: Double): String {
+        val cents = BigDecimal.valueOf(amount).setScale(2, RoundingMode.HALF_UP)
+        return if (cents.stripTrailingZeros().scale() <= 0) cents.setScale(0).toPlainString() else cents.toPlainString()
+    }
 
     private data class AmountResult(val value: Double? = null, val error: String? = null)
 

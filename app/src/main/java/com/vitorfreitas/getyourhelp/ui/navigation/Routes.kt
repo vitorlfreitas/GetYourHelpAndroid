@@ -28,6 +28,12 @@ import kotlinx.serialization.Serializable
 /** Details of one task. Only the id is passed; the screen loads the live task itself. */
 @Serializable data class TaskDetailRoute(val taskId: String)
 
+/** The "Post a task" form filled in with an open task, so its owner can change it. */
+@Serializable data class EditTaskRoute(val taskId: String)
+
+/** The chat between a task's requester and its accepted helper. */
+@Serializable data class ChatRoute(val taskId: String)
+
 /** The tabs of the bottom navigation bar, in display order. The icon is filled when the tab is selected. */
 enum class TopLevelDestination(
     val route: Any,

@@ -20,6 +20,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -35,9 +37,12 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -53,29 +58,61 @@ import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.TaskCategory
 import com.vitorfreitas.getyourhelp.data.TaskType
 import com.vitorfreitas.getyourhelp.ui.components.icon
+import com.vitorfreitas.getyourhelp.ui.components.rememberLocationAccess
 import com.vitorfreitas.getyourhelp.validation.TaskInput
 import com.vitorfreitas.getyourhelp.validation.TaskValidator
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
+/** The form is used to post a new task and to edit an open one. */
+enum class TaskFormMode(val title: String, val submitLabel: String) {
+    CREATE("Post a task", "Publish task"),
+    EDIT("Edit task", "Save changes")
+}
+
 /**
- * Form to publish a task. The fields are checked by [TaskValidator]: after the first tap on
- * "Publish", each invalid field shows what is wrong under it, and the message updates as the user types.
+ * Form to publish or edit a task. The fields are checked by [TaskValidator]: after the first tap on
+ * the button, each invalid field shows what is wrong under it, and the message updates as the user types.
+ * - [initial]: the values the fields start with
+ * - [paymentLocked]: someone has applied, so the payment part is shown but cannot be changed
+ * - [locationFill]: a place name found by "Use my current location", put into the location field
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -> Unit) {
+fun TaskFormScreen(
+    mode: TaskFormMode,
+    initial: TaskInput,
+    paymentLocked: Boolean,
+    busy: Boolean,
+    locating: Boolean,
+    locationFill: LocationFill?,
+    onUseCurrentLocation: () -> Unit,
+    onLocationDenied: () -> Unit,
+    onSubmit: (TaskInput) -> Unit,
+    onBack: () -> Unit
+) {
     // rememberSaveable keeps what was typed when the phone is rotated
-    var title by rememberSaveable { mutableStateOf("") }
-    var description by rememberSaveable { mutableStateOf("") }
-    var category by rememberSaveable { mutableStateOf(TaskCategory.PET_CARE) }
-    var location by rememberSaveable { mutableStateOf("") }
-    var scheduledAt by rememberSaveable { mutableStateOf<Long?>(null) }
-    var type by rememberSaveable { mutableStateOf(TaskType.PAID) }
-    var amount by rememberSaveable { mutableStateOf("") }
-    var cash by rememberSaveable { mutableStateOf(true) }
-    var bank by rememberSaveable { mutableStateOf(false) }
+    var title by rememberSaveable { mutableStateOf(initial.title) }
+    var description by rememberSaveable { mutableStateOf(initial.description) }
+    var category by rememberSaveable { mutableStateOf(initial.category) }
+    var location by rememberSaveable { mutableStateOf(initial.location) }
+    var scheduledAt by rememberSaveable { mutableStateOf(initial.scheduledAt) }
+    var type by rememberSaveable { mutableStateOf(initial.type) }
+    var amount by rememberSaveable { mutableStateOf(initial.amount) }
+    var cash by rememberSaveable { mutableStateOf(PaymentMethod.CASH in initial.paymentMethods) }
+    var bank by rememberSaveable { mutableStateOf(PaymentMethod.BANK_TRANSFER in initial.paymentMethods) }
     var showErrors by rememberSaveable { mutableStateOf(false) }
+
+    // Put a place found with GPS into the field once. The id is saved, so rotating the phone does
+    // not overwrite what the user typed afterwards.
+    var appliedFillId by rememberSaveable { mutableLongStateOf(0L) }
+    LaunchedEffect(locationFill) {
+        if (locationFill != null && locationFill.id != appliedFillId) {
+            location = locationFill.label
+            appliedFillId = locationFill.id
+        }
+    }
+    val locationAccess = rememberLocationAccess(onGranted = onUseCurrentLocation, onDenied = onLocationDenied)
 
     val input = TaskInput(
         title = title,
@@ -96,7 +133,7 @@ fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Post a task") },
+                title = { Text(mode.title) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                 }
@@ -158,12 +195,21 @@ fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -
                 placeholder = { Text("Town or area, e.g. Rathmines, Dublin 6") },
                 leadingIcon = { Icon(Icons.Outlined.Place, contentDescription = null) },
                 isError = shown(validation.location) != null,
-                // Tasks are public, so a town or area is enough; the exact address can be shared later
+                // Tasks are public, so a town or area is enough; the exact address can be shared later in the chat
                 supportingText = { Text(shown(validation.location) ?: "A town or area is enough. Don't enter your full address.") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
                 modifier = Modifier.fillMaxWidth()
             )
+            TextButton(onClick = locationAccess.request, enabled = !locating && !busy) {
+                if (locating) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.MyLocation, contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(if (locating) "Finding your location…" else "Use my current location")
+            }
             ScheduleField(
                 scheduledAt = scheduledAt,
                 error = shown(validation.scheduledAt),
@@ -171,11 +217,28 @@ fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -
             )
 
             SectionTitle("Payment")
+            if (paymentLocked) {
+                Row(Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.Lock,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "People have already applied for this offer, so the payment can't be changed.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 TaskType.entries.forEachIndexed { index, option ->
                     SegmentedButton(
                         selected = type == option,
                         onClick = { type = option },
+                        enabled = !paymentLocked,
                         shape = SegmentedButtonDefaults.itemShape(index = index, count = TaskType.entries.size)
                     ) { Text(if (option == TaskType.PAID) "Paid task" else "Volunteer") }
                 }
@@ -188,6 +251,7 @@ fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -
                     label = { Text("Amount you will pay") },
                     prefix = { Text("€") },
                     placeholder = { Text("15.00") },
+                    enabled = !paymentLocked,
                     isError = shown(validation.amount) != null,
                     supportingText = { Text(shown(validation.amount) ?: "Paid outside the app, in person or by bank transfer.") },
                     singleLine = true,
@@ -196,8 +260,8 @@ fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -
                 )
                 Spacer(Modifier.height(8.dp))
                 Text("Accepted payment methods", style = MaterialTheme.typography.labelLarge)
-                CheckboxRow(PaymentMethod.CASH.label, cash) { cash = it }
-                CheckboxRow(PaymentMethod.BANK_TRANSFER.label, bank) { bank = it }
+                CheckboxRow(PaymentMethod.CASH.label, cash, enabled = !paymentLocked) { cash = it }
+                CheckboxRow(PaymentMethod.BANK_TRANSFER.label, bank, enabled = !paymentLocked) { bank = it }
                 shown(validation.paymentMethods)?.let { message ->
                     Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -213,7 +277,7 @@ fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -
             Button(
                 onClick = {
                     showErrors = true
-                    if (validation.isValid) onPublish(input)
+                    if (validation.isValid) onSubmit(input)
                 },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().height(52.dp)
@@ -221,7 +285,7 @@ fun CreateTaskScreen(busy: Boolean, onPublish: (TaskInput) -> Unit, onBack: () -
                 if (busy) {
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text("Publish task")
+                    Text(mode.submitLabel)
                 }
             }
             if (showErrors && !validation.isValid) {
@@ -245,16 +309,16 @@ private fun SectionTitle(text: String) {
 
 /** A checkbox with its label; the whole row is tappable. */
 @Composable
-private fun CheckboxRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun CheckboxRow(label: String, checked: Boolean, enabled: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .toggleable(value = checked, onValueChange = onCheckedChange, role = Role.Checkbox)
+            .toggleable(value = checked, enabled = enabled, onValueChange = onCheckedChange, role = Role.Checkbox)
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Checkbox(checked = checked, onCheckedChange = null)
+        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
         Spacer(Modifier.width(12.dp))
-        Text(label)
+        Text(label, color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

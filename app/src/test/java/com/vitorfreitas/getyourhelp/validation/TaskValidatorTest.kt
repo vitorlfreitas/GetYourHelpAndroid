@@ -2,6 +2,7 @@ package com.vitorfreitas.getyourhelp.validation
 
 import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.TaskCategory
+import com.vitorfreitas.getyourhelp.data.TaskItem
 import com.vitorfreitas.getyourhelp.data.TaskType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -122,5 +123,52 @@ class TaskValidatorTest {
         assertNull(TaskValidator.applicationMessage(""))
         assertNull(TaskValidator.applicationMessage("x".repeat(TaskValidator.APPLICATION_MESSAGE_MAX)))
         assertNotNull(TaskValidator.applicationMessage("x".repeat(TaskValidator.APPLICATION_MESSAGE_MAX + 1)))
+    }
+
+    @Test
+    fun amountsAreShownTheWayAUserTypesThem() {
+        assertEquals("15", TaskValidator.amountText(15.0))
+        assertEquals("12.50", TaskValidator.amountText(12.5))
+        assertEquals("1500", TaskValidator.amountText(1500.0))
+        // And they read back as the same number
+        assertEquals(12.5, TaskValidator.parseAmount(TaskValidator.amountText(12.5))!!.toDouble(), 0.0)
+    }
+
+    @Test
+    fun editFormStartsWithTheTasksValues() {
+        val task = TaskItem(
+            id = "t", ownerId = "me", ownerName = "Me", title = "Walk my dog", description = "Walk my dog for 30 minutes.",
+            category = TaskCategory.PET_CARE, taskType = TaskType.PAID, amount = 12.5,
+            acceptedPaymentMethods = listOf(PaymentMethod.BANK_TRANSFER), location = "Rathmines", scheduledAt = now + hour
+        )
+        val input = TaskInput.from(task)
+        assertEquals("Walk my dog", input.title)
+        assertEquals("12.50", input.amount)
+        assertEquals(setOf(PaymentMethod.BANK_TRANSFER), input.paymentMethods)
+        assertEquals(now + hour, input.scheduledAt)
+        assertTrue(validate(input).isValid)
+    }
+
+    @Test
+    fun formsWithTheSameSavedValuesAreTheSameTask() {
+        val input = validInput()
+        assertTrue(TaskValidator.sameTask(input, input.copy(title = " Walk my dog ", amount = "15.00")))
+        assertFalse(TaskValidator.sameTask(input, input.copy(amount = "16")))
+        assertFalse(TaskValidator.sameTask(input, input.copy(paymentMethods = setOf(PaymentMethod.BANK_TRANSFER))))
+        // Payment details are not saved for volunteer tasks, so they do not count as a change
+        val volunteer = input.copy(type = TaskType.VOLUNTEER, amount = "")
+        assertTrue(TaskValidator.sameTask(volunteer, volunteer.copy(amount = "20", paymentMethods = emptySet())))
+    }
+
+    @Test
+    fun editFormOfAVolunteerTaskHasNoAmount() {
+        val task = TaskItem(
+            id = "t", ownerId = "me", ownerName = "Me", title = "Help at the food bank", description = "Sort donations for two hours.",
+            category = TaskCategory.VOLUNTEERING, taskType = TaskType.VOLUNTEER, amount = 0.0,
+            acceptedPaymentMethods = emptyList(), location = "Dublin 8"
+        )
+        val input = TaskInput.from(task)
+        assertEquals("", input.amount)
+        assertTrue(validate(input).isValid)
     }
 }

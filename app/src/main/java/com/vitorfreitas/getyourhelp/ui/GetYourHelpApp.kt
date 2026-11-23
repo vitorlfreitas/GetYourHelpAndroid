@@ -10,13 +10,20 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vitorfreitas.getyourhelp.AppViewModel
+import com.vitorfreitas.getyourhelp.auth.GoogleSignInHelper
+import com.vitorfreitas.getyourhelp.auth.GoogleSignInResult
 import com.vitorfreitas.getyourhelp.ui.auth.LoginScreen
 import com.vitorfreitas.getyourhelp.ui.components.LoadingIndicator
 import com.vitorfreitas.getyourhelp.ui.navigation.MainScaffold
+import kotlinx.coroutines.launch
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
@@ -28,7 +35,7 @@ import com.vitorfreitas.getyourhelp.ui.navigation.MainScaffold
  * so they stay visible when the screen changes (e.g. "Task published." while the new task opens).
  */
 @Composable
-fun GetYourHelpApp(vm: AppViewModel) {
+fun GetYourHelpApp(vm: AppViewModel, googleSignIn: GoogleSignInHelper) {
     val state by vm.state.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -45,15 +52,40 @@ fun GetYourHelpApp(vm: AppViewModel) {
         }
     }
 
+    // The Google account picker is drawn over the activity, so it runs here (in the UI) instead of
+    // in the ViewModel, which must not keep a reference to the activity.
+    val activityContext = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var choosingAccount by remember { mutableStateOf(false) }
+    fun continueWithGoogle() {
+        if (choosingAccount) return
+        choosingAccount = true
+        vm.clearAuthError()
+        scope.launch {
+            val result = try {
+                googleSignIn.requestIdToken(activityContext)
+            } finally {
+                choosingAccount = false
+            }
+            when (result) {
+                is GoogleSignInResult.Success -> vm.signInWithGoogle(result.idToken)
+                is GoogleSignInResult.Failure -> vm.showAuthError(result.message)
+                GoogleSignInResult.Cancelled -> Unit
+            }
+        }
+    }
+
     val user = state.user
     when {
         state.checkingSession -> LoadingIndicator()
         user == null -> Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
             LoginScreen(
                 busy = state.busy,
+                googleBusy = state.googleBusy || choosingAccount,
                 error = state.authError,
                 onSignIn = vm::signIn,
                 onRegister = vm::register,
+                onGoogleSignIn = ::continueWithGoogle,
                 onResetPassword = vm::sendPasswordReset,
                 onClearError = vm::clearAuthError,
                 modifier = Modifier.padding(padding).consumeWindowInsets(padding).imePadding()

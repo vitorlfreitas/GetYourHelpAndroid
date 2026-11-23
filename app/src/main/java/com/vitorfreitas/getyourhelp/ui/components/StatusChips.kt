@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.NearMe
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -24,6 +26,7 @@ import com.vitorfreitas.getyourhelp.data.PaymentStatus
 import com.vitorfreitas.getyourhelp.data.TaskItem
 import com.vitorfreitas.getyourhelp.data.TaskStatus
 import com.vitorfreitas.getyourhelp.data.TaskType
+import com.vitorfreitas.getyourhelp.location.formatDistance
 import com.vitorfreitas.getyourhelp.ui.formatEuro
 import com.vitorfreitas.getyourhelp.ui.theme.AppTheme
 
@@ -50,7 +53,7 @@ fun Pill(
     }
 }
 
-/** Task status: Open (green), Ongoing (teal), Completed (grey). */
+/** Task status: Open (green), Ongoing (teal), Completed (grey), Cancelled (red). */
 @Composable
 fun TaskStatusChip(status: TaskStatus, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.colorScheme
@@ -59,8 +62,28 @@ fun TaskStatusChip(status: TaskStatus, modifier: Modifier = Modifier) {
         TaskStatus.OPEN -> extended.successContainer to extended.onSuccessContainer
         TaskStatus.ASSIGNED -> colors.primaryContainer to colors.onPrimaryContainer
         TaskStatus.COMPLETED -> colors.surfaceContainerHighest to colors.onSurfaceVariant
+        TaskStatus.CANCELLED -> colors.errorContainer to colors.onErrorContainer
     }
     Pill(status.label, container, content, modifier)
+}
+
+/** On an ongoing task, once the helper has marked the work as done and the requester has not confirmed it yet. */
+@Composable
+fun WorkDonePill(modifier: Modifier = Modifier) {
+    val extended = AppTheme.extendedColors
+    Pill("Work done", extended.successContainer, extended.onSuccessContainer, modifier, icon = Icons.Outlined.TaskAlt)
+}
+
+/** How far a task is from the user, e.g. "1.2 km away". */
+@Composable
+fun DistancePill(km: Double, modifier: Modifier = Modifier) {
+    Pill(
+        "${formatDistance(km)} away",
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+        icon = Icons.Outlined.NearMe
+    )
 }
 
 /** Application status: Pending (neutral), Accepted (green), Declined (red), Withdrawn (grey). */

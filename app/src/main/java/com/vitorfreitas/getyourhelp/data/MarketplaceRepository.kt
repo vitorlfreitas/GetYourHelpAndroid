@@ -1,10 +1,16 @@
 package com.vitorfreitas.getyourhelp.data
 
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.GeoPoint
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
+import com.vitorfreitas.getyourhelp.validation.ChatValidator
 import com.vitorfreitas.getyourhelp.validation.TaskValidator
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -19,8 +25,9 @@ import kotlin.enums.enumEntries
 /**
  * The only class that talks to Firebase.
  *
- * Firebase Authentication handles accounts
- * Cloud Firestore stores the shared data in the collections users, tasks, applications, paymentRecords, reports and reviews.
+ * Firebase Authentication handles accounts (email and password, or Google).
+ * Cloud Firestore stores the shared data in the collections users, tasks (each with a messages
+ * subcollection for its chat), applications, paymentRecords, reports and reviews.
  *
  * Functions named observeX return a Flow: Firestore pushes a new value whenever the data changes,
  * so every device sees changes without refreshing.
@@ -48,19 +55,33 @@ class MarketplaceRepository {
     suspend fun signIn(email: String, password: String): AppUser {
         val result = auth.signInWithEmailAndPassword(email.trim(), password).await()
         val user = result.user ?: error("Authentication did not return a user.")
-        val docRef = db.collection("users").document(user.uid)
-        val doc = docRef.get().await()
-        if (!doc.exists()) {
-            val profile = mapOf(
-                "uid" to user.uid,
-                "displayName" to (user.displayName ?: email.substringBefore("@")),
-                "email" to email.trim(),
-                "helperCategories" to emptyList<String>(),
-                "createdAt" to System.currentTimeMillis()
-            )
-            docRef.set(profile).await()
-        }
+        ensureProfile(user, email.trim())
         return currentUser() ?: error("Could not load user profile.")
+    }
+
+    /**
+     * Signs in with the Google ID token from GoogleSignInHelper. Firebase creates the account the
+     * first time, and the profile takes its name from the Google account.
+     */
+    suspend fun signInWithGoogle(idToken: String): AppUser {
+        val result = auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+        val user = result.user ?: error("Google sign-in did not return a user.")
+        ensureProfile(user, user.email.orEmpty())
+        return currentUser() ?: error("Could not load user profile.")
+    }
+
+    /** Creates the user's profile document the first time they sign in. */
+    private suspend fun ensureProfile(user: FirebaseUser, email: String) {
+        val docRef = db.collection("users").document(user.uid)
+        if (docRef.get().await().exists()) return
+        val profile = mapOf(
+            "uid" to user.uid,
+            "displayName" to (user.displayName?.takeIf { it.isNotBlank() } ?: email.substringBefore("@")),
+            "email" to email,
+            "helperCategories" to emptyList<String>(),
+            "createdAt" to System.currentTimeMillis()
+        )
+        docRef.set(profile).await()
     }
 
     /** Creates a Firebase Authentication account and its profile document in `users`. */
@@ -123,7 +144,14 @@ class MarketplaceRepository {
         awaitClose { registration.remove() }
     }
 
-    /** Publishes a task and returns its id. The form is validated by TaskValidator before this is called. */
+    /** The task as it is now, or null if it does not exist. */
+    suspend fun getTask(taskId: String): TaskItem? =
+        db.collection("tasks").document(taskId).get().await().takeIf { it.exists() }?.toTaskItem()
+
+    /**
+     * Publishes a task and returns its id. The form is validated by TaskValidator before this is called.
+     * [coordinates] is the approximate position of [location], or null if it is not known.
+     */
     suspend fun createTask(
         owner: AppUser,
         title: String,
@@ -133,6 +161,7 @@ class MarketplaceRepository {
         amount: Double,
         paymentMethods: List<PaymentMethod>,
         location: String,
+        coordinates: Coordinates?,
         scheduledAt: Long?
     ): String {
         require(title.isNotBlank()) { "Task title is required." }
@@ -148,18 +177,129 @@ class MarketplaceRepository {
             title = title.trim(), description = description.trim(), category = category,
             taskType = taskType, amount = if (isPaid) amount else 0.0,
             acceptedPaymentMethods = if (isPaid) paymentMethods.distinct() else emptyList(),
-            location = location.trim(), scheduledAt = scheduledAt
+            location = location.trim(), coordinates = coordinates, scheduledAt = scheduledAt
         )
         db.collection("tasks").document(task.id).set(task.toMap()).await()
         return task.id
     }
 
-    /** The requester confirms the work is done: ASSIGNED becomes COMPLETED. */
+    /**
+     * Saves the requester's changes to an open task. Once someone has a pending application, the
+     * payment (type, amount and methods) is fixed, because helpers applied for that offer.
+     * The transaction re-reads the task, so a task that got a helper in the meantime is not changed.
+     */
+    suspend fun updateTask(
+        task: TaskItem,
+        title: String,
+        description: String,
+        category: TaskCategory,
+        taskType: TaskType,
+        amount: Double,
+        paymentMethods: List<PaymentMethod>,
+        location: String,
+        coordinates: Coordinates?,
+        scheduledAt: Long?
+    ) {
+        require(task.ownerId == auth.currentUser?.uid) { "Only the requester can edit this task." }
+        require(title.isNotBlank() && description.isNotBlank() && location.isNotBlank()) { "Fill in every required field." }
+        val isPaid = taskType == TaskType.PAID
+        val newAmount = if (isPaid) amount else 0.0
+        val newMethods = if (isPaid) paymentMethods.distinct() else emptyList()
+        if (isPaid) require(newAmount > 0.0 && newMethods.isNotEmpty()) { "Enter an amount and at least one payment method." }
+        val paymentChanged = taskType != task.taskType || newAmount != task.amount ||
+            newMethods.toSet() != task.acceptedPaymentMethods.toSet()
+        if (paymentChanged && hasPendingApplications(task.id)) {
+            error("People have already applied, so the payment can't be changed. You can still edit the other details.")
+        }
+        val taskRef = db.collection("tasks").document(task.id)
+        db.runTransaction { transaction ->
+            if (transaction.get(taskRef).getString("status") != TaskStatus.OPEN.name) {
+                error("This task is no longer open, so it can't be edited.")
+            }
+            transaction.update(taskRef, mapOf(
+                "title" to title.trim(), "description" to description.trim(), "category" to category.name,
+                "taskType" to taskType.name, "amount" to newAmount,
+                "acceptedPaymentMethods" to newMethods.map { it.name },
+                "location" to location.trim(), "coordinates" to coordinates?.toGeoPoint(),
+                "scheduledAt" to scheduledAt, "editedAt" to System.currentTimeMillis()
+            ))
+            null
+        }.await()
+    }
+
+    /**
+     * The requester cancels an open task: it leaves Browse and nobody can apply any more. Pending
+     * applications are kept, so helpers can see what happened to them.
+     */
+    suspend fun cancelTask(task: TaskItem) {
+        require(task.ownerId == auth.currentUser?.uid) { "Only the requester can cancel this task." }
+        val taskRef = db.collection("tasks").document(task.id)
+        db.runTransaction { transaction ->
+            if (transaction.get(taskRef).getString("status") != TaskStatus.OPEN.name) {
+                error("This task already has a helper, so it can't be cancelled.")
+            }
+            transaction.update(taskRef, "status", TaskStatus.CANCELLED.name)
+            null
+        }.await()
+    }
+
+    /** The accepted helper says the work is finished. The requester then confirms it with [completeTask]. */
+    suspend fun markWorkDone(task: TaskItem) {
+        require(task.assignedHelperId == auth.currentUser?.uid) { "Only the helper can mark the work as done." }
+        require(task.status == TaskStatus.ASSIGNED) { "Only an ongoing task can be marked as done." }
+        db.collection("tasks").document(task.id).update("workDoneAt", System.currentTimeMillis()).await()
+    }
+
+    /** The requester says the work is not finished yet. The helper's "done" mark is removed and the task stays ongoing. */
+    suspend fun markWorkNotFinished(task: TaskItem) {
+        require(task.ownerId == auth.currentUser?.uid) { "Only the requester can do this." }
+        require(task.status == TaskStatus.ASSIGNED && task.workDoneAt != null) { "The helper has not marked the work as done." }
+        db.collection("tasks").document(task.id).update("workDoneAt", null).await()
+    }
+
+    /** The requester confirms the work the helper marked as done: ASSIGNED becomes COMPLETED. */
     suspend fun completeTask(task: TaskItem, user: AppUser) {
         require(task.ownerId == user.uid) { "Only the requester can confirm task completion." }
         require(task.status == TaskStatus.ASSIGNED) { "Only an ongoing task can be completed." }
+        require(task.workDoneAt != null) { "Wait until the helper marks the work as done." }
         db.collection("tasks").document(task.id).update("status", TaskStatus.COMPLETED.name).await()
     }
+
+    // Chat
+
+    /**
+     * Live list of a task's chat messages, oldest first (the newest [CHAT_HISTORY_LIMIT]).
+     * MetadataChanges.INCLUDE sends an update when a message reaches the server, so "Sending…" changes to its time.
+     */
+    fun observeMessages(taskId: String): Flow<List<ChatMessage>> = callbackFlow {
+        val registration = messages(taskId)
+            .orderBy("sentAt", Query.Direction.ASCENDING)
+            .limitToLast(CHAT_HISTORY_LIMIT)
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                if (error != null) close(error)
+                else trySend(snapshot?.documents?.mapNotNull { it.toChatMessage() }.orEmpty())
+            }
+        awaitClose { registration.remove() }
+    }
+
+    /**
+     * Sends a chat message. It appears on screen at once (Firestore's local cache), and the
+     * server stamps the time. Only the requester and the helper can write, and only while the task is ongoing.
+     */
+    suspend fun sendMessage(task: TaskItem, sender: AppUser, text: String) {
+        ChatValidator.message(text)?.let { throw IllegalArgumentException(it) }
+        require(task.chatIsOpen) { "The chat is closed because the task is completed." }
+        require(task.hasChatFor(sender.uid)) { "Only the requester and the helper can use this chat." }
+        val message = mapOf(
+            "senderId" to sender.uid,
+            "senderName" to sender.displayName,
+            "text" to text.trim(),
+            "sentAt" to FieldValue.serverTimestamp()
+        )
+        messages(task.id).document().set(message).await()
+    }
+
+    private fun messages(taskId: String) = db.collection("tasks").document(taskId).collection("messages")
 
     // ---------------------------------------------------------------- Applications
 
@@ -182,6 +322,11 @@ class MarketplaceRepository {
             }
         awaitClose { registration.remove() }
     }
+
+    /** True if someone is waiting for an answer on this task. Only the task owner can ask. */
+    suspend fun hasPendingApplications(taskId: String): Boolean =
+        db.collection("applications").whereEqualTo("taskId", taskId).get().await()
+            .documents.any { it.getString("status") == ApplicationStatus.PENDING.name }
 
     /**
      * Sends a PENDING application. preferredMethod is ignored (stored as not applicable) for volunteer tasks.
@@ -269,11 +414,24 @@ class MarketplaceRepository {
 
     // Reports and reviews
 
-    /** Saves a report for later review. The task is not removed automatically. */
+    /** True if this user has already reported the task. */
+    suspend fun hasReported(taskId: String, userId: String): Boolean =
+        db.collection("reports").document(reportId(taskId, userId)).get().await().exists()
+
+    /**
+     * Saves a report for later review. The task is not removed automatically. The document id is
+     * "<taskId>_<reporterId>", and the transaction checks it does not exist yet, so each user can
+     * report a task only once.
+     */
     suspend fun reportTask(task: TaskItem, user: AppUser, reason: String, details: String) {
         require(reason.isNotBlank()) { "Select a report reason." }
-        val report = TaskReport(UUID.randomUUID().toString(), task.id, user.uid, reason, details.trim())
-        db.collection("reports").document(report.id).set(report.toMap()).await()
+        val reportRef = db.collection("reports").document(reportId(task.id, user.uid))
+        val report = TaskReport(reportRef.id, task.id, user.uid, reason, details.trim())
+        db.runTransaction { transaction ->
+            if (transaction.get(reportRef).exists()) error("You have already reported this task.")
+            transaction.set(reportRef, report.toMap())
+            null
+        }.await()
     }
 
     /** After completion, the requester and the assigned helper can each review the other once. */
@@ -312,10 +470,18 @@ class MarketplaceRepository {
         require(user.uid == payer || user.uid == payee) { "You are not part of this payment record." }
         ref.update(mapOf("status" to PaymentStatus.MARKED_PAID.name, "updatedAt" to System.currentTimeMillis())).await()
     }
+
+    private companion object {
+        /** A task chat loads at most this many of its latest messages. */
+        const val CHAT_HISTORY_LIMIT = 500L
+    }
 }
 
 /** Document id of a helper's application for a task. The security rules check this format. */
 fun applicationId(taskId: String, helperId: String): String = "${taskId}_$helperId"
+
+/** Document id of a user's report about a task, so each user can report a task only once. The security rules check this format. */
+fun reportId(taskId: String, reporterId: String): String = "${taskId}_$reporterId"
 
 // How enums are stored: by name ("OPEN", "CASH"...). A missing payment method (volunteer tasks) is stored as "NOT_APPLICABLE".
 private const val NOT_APPLICABLE = "NOT_APPLICABLE"
@@ -333,14 +499,18 @@ private fun categoryFromStored(value: String?): TaskCategory? =
 private fun DocumentSnapshot.getStringList(field: String): List<String> =
     (get(field) as? List<*>)?.filterIsInstance<String>().orEmpty()
 
+// Positions are stored as Firestore GeoPoints, which the security rules can check (type latlng).
+private fun Coordinates.toGeoPoint() = GeoPoint(latitude, longitude)
+
 // Converting data classes to Firestore documents (field name -> value).
 private fun TaskItem.toMap() = mapOf(
     "id" to id, "ownerId" to ownerId, "ownerName" to ownerName, "title" to title,
     "description" to description, "category" to category.name, "taskType" to taskType.name, "amount" to amount,
     "acceptedPaymentMethods" to acceptedPaymentMethods.map { it.name }, "location" to location,
-    "scheduledAt" to scheduledAt, "status" to status.name,
+    "coordinates" to coordinates?.toGeoPoint(), "scheduledAt" to scheduledAt, "status" to status.name,
     "assignedHelperId" to assignedHelperId, "assignedHelperName" to assignedHelperName,
-    "agreedPaymentMethod" to agreedPaymentMethod?.name.orEmpty(), "createdAt" to createdAt
+    "agreedPaymentMethod" to agreedPaymentMethod?.name.orEmpty(), "workDoneAt" to workDoneAt,
+    "editedAt" to editedAt, "createdAt" to createdAt
 )
 private fun TaskApplication.toMap() = mapOf(
     "id" to id, "taskId" to taskId, "helperId" to helperId, "helperName" to helperName,
@@ -377,11 +547,14 @@ private fun DocumentSnapshot.toTaskItem(): TaskItem? {
             amount = getDouble("amount") ?: 0.0,
             acceptedPaymentMethods = getStringList("acceptedPaymentMethods").mapNotNull { enumFromStored<PaymentMethod>(it) },
             location = getString("location").orEmpty(),
+            coordinates = getGeoPoint("coordinates")?.let { Coordinates(it.latitude, it.longitude) },
             scheduledAt = getLong("scheduledAt"),
             status = status,
             assignedHelperId = getString("assignedHelperId").orEmpty(),
             assignedHelperName = getString("assignedHelperName").orEmpty(),
             agreedPaymentMethod = enumFromStored<PaymentMethod>(getString("agreedPaymentMethod")),
+            workDoneAt = getLong("workDoneAt"),
+            editedAt = getLong("editedAt"),
             createdAt = getLong("createdAt") ?: 0L
         )
     } catch (_: Exception) { null }
@@ -396,6 +569,17 @@ private fun DocumentSnapshot.toApplication(): TaskApplication? = try {
         message = getString("message").orEmpty(),
         status = enumFromStored<ApplicationStatus>(getString("status")) ?: ApplicationStatus.PENDING,
         createdAt = getLong("createdAt") ?: 0L
+    )
+} catch (_: Exception) { null }
+private fun DocumentSnapshot.toChatMessage(): ChatMessage? = try {
+    ChatMessage(
+        id = id,
+        senderId = getString("senderId").orEmpty(),
+        senderName = getString("senderName").orEmpty(),
+        text = getString("text").orEmpty(),
+        // While a message is still on its way, the server time is unknown: ESTIMATE uses the local time until then.
+        sentAt = getTimestamp("sentAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time ?: 0L,
+        pending = metadata.hasPendingWrites()
     )
 } catch (_: Exception) { null }
 private fun DocumentSnapshot.toPayment(): PaymentRecord? = try {

@@ -2,6 +2,7 @@ package com.vitorfreitas.getyourhelp.ui.navigation
 
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
@@ -14,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -36,13 +38,22 @@ fun MainScaffold(vm: AppViewModel, snackbarHostState: SnackbarHostState) {
     val currentTab = if (currentDestination == null) TopLevelDestination.BROWSE
     else TopLevelDestination.entries.firstOrNull { currentDestination.hasRoute(it.route::class) }
     val showBottomBar = currentTab != null
+    val onChat = currentDestination?.hasRoute(ChatRoute::class) == true
 
     Scaffold(
         // Each screen has its own top bar, which already leaves room for the status bar.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = {
-            // Without the bottom bar, keep snackbars above the system navigation bar.
-            SnackbarHost(snackbarHostState, if (showBottomBar) Modifier else Modifier.navigationBarsPadding())
+            // Without the bottom bar, keep snackbars above the system navigation bar and the keyboard,
+            // and in the chat also above the message field.
+            SnackbarHost(
+                snackbarHostState,
+                when {
+                    showBottomBar -> Modifier
+                    onChat -> Modifier.navigationBarsPadding().imePadding().padding(bottom = 72.dp)
+                    else -> Modifier.navigationBarsPadding().imePadding()
+                }
+            )
         },
         bottomBar = {
             if (showBottomBar) {

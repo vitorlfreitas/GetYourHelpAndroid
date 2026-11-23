@@ -7,6 +7,7 @@ import com.vitorfreitas.getyourhelp.data.TaskItem
 import com.vitorfreitas.getyourhelp.data.TaskStatus
 import com.vitorfreitas.getyourhelp.data.TaskType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
@@ -95,5 +96,22 @@ class MyTasksGroupingTest {
     fun applicationsForDeletedTasksAreSkipped() {
         val applied = helpingTasksByStage(emptyList(), listOf(application("gone")), me).getValue(TaskStage.WAITING)
         assertEquals(0, applied.size)
+    }
+
+    @Test
+    fun cancelledTasksHaveTheirOwnGroupForTheRequester() {
+        val tasks = listOf(task("open", owner = me), task("cancelled", owner = me, status = TaskStatus.CANCELLED))
+        val groups = requestedTasksByStage(tasks, me)
+        assertEquals(listOf("open"), groups.getValue(TaskStage.WAITING).map { it.id })
+        assertEquals(listOf("cancelled"), groups.getValue(TaskStage.CANCELLED).map { it.id })
+    }
+
+    @Test
+    fun aCancelledTaskStaysUnderAppliedForTheHelper() {
+        val tasks = listOf(task("cancelled", status = TaskStatus.CANCELLED))
+        val groups = helpingTasksByStage(tasks, listOf(application("cancelled")), me)
+        val item = groups.getValue(TaskStage.WAITING).single()
+        assertTrue(item.taskCancelled)
+        assertEquals(0, groups.getValue(TaskStage.CANCELLED).size)
     }
 }

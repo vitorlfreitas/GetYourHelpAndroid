@@ -1,5 +1,8 @@
 package com.vitorfreitas.getyourhelp.ui.auth
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,10 +31,13 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,7 +50,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -52,20 +60,25 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.vitorfreitas.getyourhelp.R
 import com.vitorfreitas.getyourhelp.validation.AuthValidator
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Sign in, or create an account. Field errors appear after the first attempt to submit, and then
- * update as the user types. [error] is the reason the last attempt failed (e.g. a wrong password).
+ * Sign in, or create an account, with email and password or with "Continue with Google".
+ * Field errors appear after the first attempt to submit, and then update as the user types.
+ * [error] is the reason the last attempt failed (e.g. a wrong password).
+ * [busy] is true while signing in with email, [googleBusy] while signing in with Google.
  */
 @Composable
 fun LoginScreen(
     busy: Boolean,
+    googleBusy: Boolean,
     error: String?,
     onSignIn: (email: String, password: String) -> Unit,
     onRegister: (name: String, email: String, password: String) -> Unit,
+    onGoogleSignIn: () -> Unit,
     onResetPassword: (email: String) -> Unit,
     onClearError: () -> Unit,
     modifier: Modifier = Modifier
@@ -88,7 +101,7 @@ fun LoginScreen(
 
     fun submit() {
         showErrors = true
-        if (!formValid || busy) return
+        if (!formValid || busy || googleBusy) return
         if (registerMode) onRegister(name, email, password) else onSignIn(email, password)
     }
 
@@ -176,7 +189,7 @@ fun LoginScreen(
                 ErrorMessage(error)
             }
             Spacer(Modifier.height(16.dp))
-            Button(onClick = ::submit, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Button(onClick = ::submit, enabled = !busy && !googleBusy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(22.dp),
@@ -187,6 +200,11 @@ fun LoginScreen(
                     Text(if (registerMode) "Create account" else "Sign in")
                 }
             }
+            Spacer(Modifier.height(16.dp))
+            OrDivider()
+            Spacer(Modifier.height(16.dp))
+            // Works for new and existing users: the first Google sign-in creates the account
+            GoogleSignInButton(busy = googleBusy, enabled = !busy && !googleBusy, onClick = onGoogleSignIn)
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = { registerMode = !registerMode; showErrors = false; onClearError() }) {
                 Text(if (registerMode) "Already have an account? Sign in" else "New here? Create an account")
@@ -257,6 +275,48 @@ private fun PasswordTextField(
         keyboardActions = KeyboardActions(onDone = { onDone() }),
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+/** A line with "or" in the middle, between the email form and the Google button. */
+@Composable
+private fun OrDivider() {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        HorizontalDivider(Modifier.weight(1f))
+        Text(
+            "or",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+        HorizontalDivider(Modifier.weight(1f))
+    }
+}
+
+/**
+ * "Continue with Google", drawn as Google's branding guidelines ask: the Google "G" logo, and
+ * Google's own neutral colours for light and dark mode instead of the app's colours.
+ */
+@Composable
+private fun GoogleSignInButton(busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val dark = isSystemInDarkTheme()
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (dark) Color(0xFF131314) else Color.White,
+            contentColor = if (dark) Color(0xFFE3E3E3) else Color(0xFF1F1F1F)
+        ),
+        border = BorderStroke(1.dp, if (dark) Color(0xFF8E918F) else Color(0xFF747775)),
+        modifier = Modifier.fillMaxWidth().height(52.dp)
+    ) {
+        if (busy) {
+            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+        } else {
+            Image(painterResource(R.drawable.ic_google_logo), contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text("Continue with Google")
+        }
+    }
 }
 
 /** Why the last sign-in or registration failed, in a red box under the form. */

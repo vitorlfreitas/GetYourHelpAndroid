@@ -26,13 +26,15 @@ enum class TaskType(val label: String) {
 }
 
 /**
- * Life cycle of a task: OPEN -> ASSIGNED (a helper was accepted) -> COMPLETED (requester confirmed).
+ * Life cycle of a task: OPEN -> ASSIGNED (a helper was accepted) -> COMPLETED (the helper marked the
+ * work as done and the requester confirmed it). The requester can also cancel a task while it is OPEN.
  * The app shows ASSIGNED as "Ongoing", the name used in the project proposal.
  */
 enum class TaskStatus(val label: String) {
     OPEN("Open"),
     ASSIGNED("Ongoing"),
-    COMPLETED("Completed")
+    COMPLETED("Completed"),
+    CANCELLED("Cancelled")
 }
 
 /** How a paid task can be paid. Volunteer tasks have no payment method, which the app represents as null. */
@@ -63,10 +65,19 @@ data class AppUser(
 )
 
 /**
+ * A point on the map, in degrees. Tasks only store an approximate point (rounded to about 100 m),
+ * so a task never reveals the requester's exact address.
+ */
+data class Coordinates(val latitude: Double, val longitude: Double)
+
+/**
  * A task published by a requester (collection `tasks`).
  * Volunteer tasks have amount 0 and no accepted payment methods.
- * scheduledAt is the expected date and time (epoch milliseconds), or null when the date is flexible.
- * agreedPaymentMethod is set when a helper is accepted (null until then, and for volunteer tasks).
+ * - coordinates: approximate position of [location], used for distances and "Open in Maps" (null when unknown)
+ * - scheduledAt: the expected date and time (epoch milliseconds), or null when the date is flexible
+ * - agreedPaymentMethod: set when a helper is accepted (null until then, and for volunteer tasks)
+ * - workDoneAt: when the helper marked the work as done, so the requester can confirm it (null until then)
+ * - editedAt: when the requester last edited the task (null if it was never edited)
  */
 data class TaskItem(
     val id: String,
@@ -79,13 +90,28 @@ data class TaskItem(
     val amount: Double,
     val acceptedPaymentMethods: List<PaymentMethod>,
     val location: String,
+    val coordinates: Coordinates? = null,
     val scheduledAt: Long? = null,
     val status: TaskStatus = TaskStatus.OPEN,
     val assignedHelperId: String = "",
     val assignedHelperName: String = "",
     val agreedPaymentMethod: PaymentMethod? = null,
+    val workDoneAt: Long? = null,
+    val editedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+/**
+ * True if [userId] can open this task's chat: once a helper is accepted, the requester and that
+ * helper can message each other. After completion the chat stays readable, but no one can write.
+ */
+fun TaskItem.hasChatFor(userId: String): Boolean =
+    (status == TaskStatus.ASSIGNED || status == TaskStatus.COMPLETED) &&
+        assignedHelperId.isNotEmpty() && (userId == ownerId || userId == assignedHelperId)
+
+/** New messages can only be sent while the task is ongoing. */
+val TaskItem.chatIsOpen: Boolean
+    get() = status == TaskStatus.ASSIGNED
 
 /**
  * A helper's application for a task (collection `applications`).
@@ -117,7 +143,24 @@ data class PaymentRecord(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-/** A user's report about a task (collection `reports`), stored for later review. */
+/**
+ * A message in a task's chat (subcollection `tasks/{taskId}/messages`).
+ * sentAt is set by the Firestore server, so both phones order messages the same way, whatever
+ * their clocks say. pending is true while the message has not reached the server yet.
+ */
+data class ChatMessage(
+    val id: String,
+    val senderId: String,
+    val senderName: String,
+    val text: String,
+    val sentAt: Long,
+    val pending: Boolean = false
+)
+
+/**
+ * A user's report about a task (collection `reports`), stored for later review.
+ * The document id is "<taskId>_<reporterId>", so each user can report a task only once.
+ */
 data class TaskReport(
     val id: String,
     val taskId: String,
