@@ -32,6 +32,7 @@ The app does not process money. Payments are agreed between the two people (cash
 | -------------- | ------------------------------------------------------------------ |
 | Language       | Kotlin                                                             |
 | UI             | Jetpack Compose, Material 3                                        |
+| Navigation     | Navigation Compose with type-safe routes (Kotlin Serialization)    |
 | Architecture   | MVVM (ViewModel + repository) with Kotlin Coroutines and StateFlow |
 | Authentication | Firebase Authentication (email/password)                           |
 | Database       | Cloud Firestore, protected by security rules (simplified)          |
@@ -95,7 +96,7 @@ The APK is written to `app/build/outputs/apk/debug/`.
 
 ## How to use
 
-The bottom navigation has five tabs: **Browse**, **Create**, **My Tasks**, **Wallet** and **Profile**.
+The bottom navigation has five tabs: **Browse**, **Create**, **My Tasks**, **Wallet** and **Profile**. Tapping a task opens its details page. **Sign out** is in the top bar of the Profile tab.
 
 ### As a requester
 
@@ -110,7 +111,7 @@ The bottom navigation has five tabs: **Browse**, **Create**, **My Tasks**, **Wal
 1. Go to **Profile** and choose the categories you are interested in.
 2. Find a task in **Browse** and open it.
 3. Pick your preferred payment method and tap **Apply for this task**.
-4. Follow the task under **My Tasks**. Once you are accepted it shows as `ASSIGNED`.
+4. Follow the task under **My Tasks**. Once you are accepted it shows as **Assigned**.
 5. After the requester confirms completion, leave a review.
 
 For paid tasks, a payment record is created when the requester accepts a helper. Both people can see it under **Wallet** and mark it as paid once the money has changed hands.
@@ -121,7 +122,7 @@ With Firebase connected, the easiest way to test is with two emulators (or an em
 
 1. Device A registers and publishes a paid task.
 2. Device B registers, finds the task in Browse and applies.
-3. Device A accepts the application; both devices now show the task as `ASSIGNED`.
+3. Device A accepts the application, both devices now show the task as **Assigned**.
 4. Device A confirms completion, and both users leave a review.
 5. Both users check the payment record in Wallet.
 
@@ -137,9 +138,21 @@ GetYourHelpAndroid/
 │       └── java/com/vitorfreitas/getyourhelp/
 │           ├── MainActivity.kt
 │           ├── AppViewModel.kt
-│           └── data/
-│               ├── Models.kt
-│               └── MarketplaceRepository.kt
+│           ├── data/
+│           │   ├── Models.kt
+│           │   └── MarketplaceRepository.kt
+│           └── ui/
+│               ├── GetYourHelpApp.kt
+│               ├── Formatting.kt
+│               ├── navigation/   Routes, MainScaffold, AppNavHost
+│               ├── components/   TaskCard, StatusTag, EmptyState, LoadingIndicator
+│               ├── auth/         LoginScreen
+│               ├── browse/       BrowseScreen
+│               ├── create/       CreateTaskScreen
+│               ├── mytasks/      MyTasksScreen
+│               ├── wallet/       WalletScreen
+│               ├── profile/      ProfileScreen
+│               └── taskdetail/   TaskDetailScreen, TaskDialogs (report, review)
 ├── build.gradle.kts
 ├── settings.gradle.kts
 ├── gradle.properties
@@ -147,14 +160,18 @@ GetYourHelpAndroid/
 └── firestore.rules
 ```
 
-| File                            | Purpose                                                                                                                               |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `MainActivity.kt`               | Entry point and all Compose screens: login, browse, create, my tasks, wallet, profile, and the task detail, report and review dialogs |
-| `AppViewModel.kt`               | Holds the UI state (`MarketplaceState`) and exposes the actions the screens call                                                      |
-| `data/Models.kt`                | Data classes: `AppUser`, `TaskItem`, `TaskApplication`, `PaymentRecord`, `TaskReport`, `ReviewRecord`                                 |
-| `data/MarketplaceRepository.kt` | Reads and writes data with Firebase Authentication and Cloud Firestore                                                                |
-| `firestore.rules`               | Firestore security rules                                                                                                              |
-| `firebase.json`                 | Firebase CLI configuration pointing to the rules file                                                                                 |
+| File / folder                       | Purpose                                                                                                         |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `MainActivity.kt`                   | Entry point: creates the ViewModel and shows `GetYourHelpApp`                                                   |
+| `AppViewModel.kt`                   | Holds the UI state (`MarketplaceState`) and exposes the actions the screens call                                |
+| `data/Models.kt`                    | Enums for statuses, task types, categories and payment methods, and the data classes saved in Firestore         |
+| `data/MarketplaceRepository.kt`     | Reads and writes data with Firebase Authentication and Cloud Firestore                                          |
+| `ui/GetYourHelpApp.kt`              | Root composable: loading spinner, login screen or the signed-in app, and the snackbar messages                 |
+| `ui/navigation/`                    | Routes (one class per screen), the bottom navigation bar, and the `NavHost` that connects screens to the state |
+| `ui/components/`                    | Small composables shared by several screens                                                                     |
+| `ui/<feature>/`                     | One folder per screen                                                                                           |
+| `firestore.rules`                   | Firestore security rules                                                                                        |
+| `firebase.json`                     | Firebase CLI configuration pointing to the rules file                                                           |
 
 ## Security
 

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
+import kotlin.enums.enumEntries
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
@@ -27,12 +28,11 @@ class MarketplaceRepository {
     suspend fun currentUser(): AppUser? {
         val firebaseUser = auth.currentUser ?: return null
         val doc = db.collection("users").document(firebaseUser.uid).get().await()
-        val categories = (doc.get("helperCategories") as? List<*>)?.filterIsInstance<String>().orEmpty()
         return AppUser(
             uid = firebaseUser.uid,
             displayName = doc.getString("displayName") ?: firebaseUser.displayName ?: firebaseUser.email.orEmpty(),
             email = firebaseUser.email.orEmpty(),
-            helperCategories = categories
+            helperCategories = doc.getStringList("helperCategories").mapNotNull(::categoryFromStored).distinct()
         )
     }
 
@@ -75,10 +75,10 @@ class MarketplaceRepository {
         auth.signOut()
     }
 
-    suspend fun updateHelperCategories(user: AppUser, categories: List<String>): AppUser {
+    suspend fun updateHelperCategories(user: AppUser, categories: List<TaskCategory>): AppUser {
         val updated = user.copy(helperCategories = categories.distinct())
         db.collection("users").document(user.uid)
-            .update("helperCategories", updated.helperCategories).await()
+            .update("helperCategories", updated.helperCategories.map { it.name }).await()
         return updated
     }
 
@@ -99,24 +99,25 @@ class MarketplaceRepository {
         owner: AppUser,
         title: String,
         description: String,
-        category: String,
-        taskType: String,
+        category: TaskCategory,
+        taskType: TaskType,
         amount: Double,
-        paymentMethods: List<String>,
+        paymentMethods: List<PaymentMethod>,
         location: String
     ) {
         require(title.isNotBlank()) { "Task title is required." }
         require(description.isNotBlank()) { "Task description is required." }
         require(location.isNotBlank()) { "Location is required." }
-        if (taskType == "PAID") {
+        val isPaid = taskType == TaskType.PAID
+        if (isPaid) {
             require(amount > 0.0) { "Enter an amount greater than zero for a paid task." }
             require(paymentMethods.isNotEmpty()) { "Select at least one payment method." }
         }
         val task = TaskItem(
             id = UUID.randomUUID().toString(), ownerId = owner.uid, ownerName = owner.displayName,
             title = title.trim(), description = description.trim(), category = category,
-            taskType = taskType, amount = if (taskType == "PAID") amount else 0.0,
-            acceptedPaymentMethods = if (taskType == "PAID") paymentMethods.distinct() else emptyList(),
+            taskType = taskType, amount = if (isPaid) amount else 0.0,
+            acceptedPaymentMethods = if (isPaid) paymentMethods.distinct() else emptyList(),
             location = location.trim()
         )
         db.collection("tasks").document(task.id).set(task.toMap()).await()
@@ -132,19 +133,20 @@ class MarketplaceRepository {
         db.collection("applications").whereEqualTo("helperId", userId).get().await()
             .documents.mapNotNull { it.toApplication() }
 
-    /** Creates a PENDING application */
-    suspend fun applyToTask(task: TaskItem, helper: AppUser, preferredMethod: String) {
+    /** Creates a PENDING application. preferredMethod is ignored (stored as not applicable) for volunteer tasks. */
+    suspend fun applyToTask(task: TaskItem, helper: AppUser, preferredMethod: PaymentMethod?) {
         require(task.ownerId != helper.uid) { "You cannot apply to your own task." }
-        require(task.status == "OPEN") { "This task is no longer open." }
-        if (task.taskType == "PAID") require(preferredMethod in task.acceptedPaymentMethods) {
+        require(task.status == TaskStatus.OPEN) { "This task is no longer open." }
+        val isPaid = task.taskType == TaskType.PAID
+        if (isPaid) require(preferredMethod != null && preferredMethod in task.acceptedPaymentMethods) {
             "Choose a payment method accepted by the requester."
         }
         val alreadyApplied = myApplications(helper.uid)
-            .any { it.taskId == task.id && it.status != "WITHDRAWN" }
+            .any { it.taskId == task.id && it.status != ApplicationStatus.WITHDRAWN }
         if (alreadyApplied) error("You have already applied for this task.")
         val application = TaskApplication(
             id = UUID.randomUUID().toString(), taskId = task.id, helperId = helper.uid,
-            helperName = helper.displayName, preferredPaymentMethod = preferredMethod
+            helperName = helper.displayName, preferredPaymentMethod = if (isPaid) preferredMethod else null
         )
         db.collection("applications").document(application.id).set(application.toMap()).await()
     }
@@ -157,21 +159,22 @@ class MarketplaceRepository {
      */
     suspend fun acceptApplication(task: TaskItem, application: TaskApplication) {
         require(task.ownerId == auth.currentUser?.uid) { "Only the requester can accept an application." }
-        require(task.status == "OPEN") { "This task is no longer open." }
+        require(task.status == TaskStatus.OPEN) { "This task is no longer open." }
         val batch = db.batch()
         val existingApplications = db.collection("applications").whereEqualTo("taskId", task.id).get().await()
         existingApplications.documents.forEach { document ->
-            val newStatus = if (document.id == application.id) "ACCEPTED" else "DECLINED"
-            if ((document.getString("status") ?: "PENDING") == "PENDING") {
-                batch.update(document.reference, "status", newStatus)
+            val currentStatus = enumFromStored<ApplicationStatus>(document.getString("status")) ?: ApplicationStatus.PENDING
+            if (currentStatus == ApplicationStatus.PENDING) {
+                val newStatus = if (document.id == application.id) ApplicationStatus.ACCEPTED else ApplicationStatus.DECLINED
+                batch.update(document.reference, "status", newStatus.name)
             }
         }
         batch.update(db.collection("tasks").document(task.id), mapOf(
-            "status" to "ASSIGNED", "assignedHelperId" to application.helperId,
+            "status" to TaskStatus.ASSIGNED.name, "assignedHelperId" to application.helperId,
             "assignedHelperName" to application.helperName,
-            "agreedPaymentMethod" to application.preferredPaymentMethod
+            "agreedPaymentMethod" to application.preferredPaymentMethod.toStored()
         ))
-        if (task.taskType == "PAID") {
+        if (task.taskType == TaskType.PAID) {
             val payment = PaymentRecord(
                 id = UUID.randomUUID().toString(), taskId = task.id, taskTitle = task.title,
                 payerId = task.ownerId, payeeId = application.helperId,
@@ -186,8 +189,8 @@ class MarketplaceRepository {
     /** The requester confirms the work is done: ASSIGNED becomes COMPLETED. */
     suspend fun completeTask(task: TaskItem, user: AppUser) {
         require(task.ownerId == user.uid) { "Only the requester can confirm task completion." }
-        require(task.status == "ASSIGNED") { "Only an assigned task can be completed." }
-        db.collection("tasks").document(task.id).update("status", "COMPLETED").await()
+        require(task.status == TaskStatus.ASSIGNED) { "Only an assigned task can be completed." }
+        db.collection("tasks").document(task.id).update("status", TaskStatus.COMPLETED.name).await()
     }
 
     /** Saves a report for later review. The task is not removed automatically. */
@@ -199,7 +202,7 @@ class MarketplaceRepository {
 
     /** After completion, the requester and the assigned helper can each review the other once. */
     suspend fun submitReview(task: TaskItem, reviewer: AppUser, rating: Int, comment: String) {
-        require(task.status == "COMPLETED") { "Reviews are available after a task is completed." }
+        require(task.status == TaskStatus.COMPLETED) { "Reviews are available after a task is completed." }
         require(rating in 1..5) { "Choose a rating from 1 to 5." }
         val revieweeId = if (reviewer.uid == task.ownerId) task.assignedHelperId else task.ownerId
         val revieweeName = if (reviewer.uid == task.ownerId) task.assignedHelperName else task.ownerName
@@ -222,33 +225,49 @@ class MarketplaceRepository {
             .mapNotNull { it.toPayment() }.sortedByDescending { it.updatedAt }
     }
 
-    /** Marks a payment as paid. This only updates the record; no money is moved. */
+    /** Marks a payment as paid. This only updates the record, no money is moved. */
     suspend fun markPaymentRecorded(paymentId: String, user: AppUser) {
         val ref = db.collection("paymentRecords").document(paymentId)
         val doc = ref.get().await()
         val payer = doc.getString("payerId")
         val payee = doc.getString("payeeId")
         require(user.uid == payer || user.uid == payee) { "You are not part of this payment record." }
-        ref.update(mapOf("status" to "MARKED_PAID", "updatedAt" to System.currentTimeMillis())).await()
+        ref.update(mapOf("status" to PaymentStatus.MARKED_PAID.name, "updatedAt" to System.currentTimeMillis())).await()
     }
 }
+
+// How enums are stored: by name ("OPEN", "CASH"...). A missing payment method (volunteer tasks) is stored as "NOT_APPLICABLE".
+private const val NOT_APPLICABLE = "NOT_APPLICABLE"
+
+private fun PaymentMethod?.toStored(): String = this?.name ?: NOT_APPLICABLE
+
+/** The enum value with this stored name, or null if the value is missing or unknown (e.g. "NOT_APPLICABLE"). */
+private inline fun <reified T : Enum<T>> enumFromStored(value: String?): T? =
+    enumEntries<T>().firstOrNull { it.name == value }
+
+/** Categories used to be stored by their label ("Pet Care") and are now stored by name ("PET_CARE") | both are accepted. */
+private fun categoryFromStored(value: String?): TaskCategory? =
+    TaskCategory.entries.firstOrNull { it.name == value || it.label == value }
+
+private fun DocumentSnapshot.getStringList(field: String): List<String> =
+    (get(field) as? List<*>)?.filterIsInstance<String>().orEmpty()
 
 // Converting data classes to Firestore documents (field name -> value).
 private fun TaskItem.toMap() = mapOf(
     "id" to id, "ownerId" to ownerId, "ownerName" to ownerName, "title" to title,
-    "description" to description, "category" to category, "taskType" to taskType, "amount" to amount,
-    "acceptedPaymentMethods" to acceptedPaymentMethods, "location" to location, "status" to status,
+    "description" to description, "category" to category.name, "taskType" to taskType.name, "amount" to amount,
+    "acceptedPaymentMethods" to acceptedPaymentMethods.map { it.name }, "location" to location, "status" to status.name,
     "assignedHelperId" to assignedHelperId, "assignedHelperName" to assignedHelperName,
-    "agreedPaymentMethod" to agreedPaymentMethod, "createdAt" to createdAt
+    "agreedPaymentMethod" to agreedPaymentMethod?.name.orEmpty(), "createdAt" to createdAt
 )
 private fun TaskApplication.toMap() = mapOf(
     "id" to id, "taskId" to taskId, "helperId" to helperId, "helperName" to helperName,
-    "preferredPaymentMethod" to preferredPaymentMethod, "status" to status, "createdAt" to createdAt
+    "preferredPaymentMethod" to preferredPaymentMethod.toStored(), "status" to status.name, "createdAt" to createdAt
 )
 private fun PaymentRecord.toMap() = mapOf(
     "id" to id, "taskId" to taskId, "taskTitle" to taskTitle, "payerId" to payerId,
     "payeeId" to payeeId, "otherPartyName" to otherPartyName, "amount" to amount,
-    "method" to method, "status" to status, "updatedAt" to updatedAt
+    "method" to method.toStored(), "status" to status.name, "updatedAt" to updatedAt
 )
 private fun TaskReport.toMap() = mapOf(
     "id" to id, "taskId" to taskId, "reporterId" to reporterId, "reason" to reason,
@@ -260,21 +279,51 @@ private fun ReviewRecord.toMap() = mapOf(
 )
 
 // Reading Firestore documents back into data classes. A malformed document returns null and is skipped.
-private fun DocumentSnapshot.toTaskItem(): TaskItem? = try {
-    TaskItem(id = id, ownerId = getString("ownerId").orEmpty(), ownerName = getString("ownerName").orEmpty(),
-        title = getString("title").orEmpty(), description = getString("description").orEmpty(), category = getString("category").orEmpty(),
-        taskType = getString("taskType").orEmpty(), amount = getDouble("amount") ?: 0.0,
-        acceptedPaymentMethods = (get("acceptedPaymentMethods") as? List<*>)?.filterIsInstance<String>().orEmpty(),
-        location = getString("location").orEmpty(), status = getString("status") ?: "OPEN",
-        assignedHelperId = getString("assignedHelperId").orEmpty(), assignedHelperName = getString("assignedHelperName").orEmpty(),
-        agreedPaymentMethod = getString("agreedPaymentMethod").orEmpty(), createdAt = getLong("createdAt") ?: 0L)
-} catch (_: Exception) { null }
+private fun DocumentSnapshot.toTaskItem(): TaskItem? {
+    // A status this version of the app does not know is skipped instead of being shown as open.
+    val status = enumFromStored<TaskStatus>(getString("status") ?: TaskStatus.OPEN.name) ?: return null
+    return try {
+        TaskItem(
+            id = id,
+            ownerId = getString("ownerId").orEmpty(),
+            ownerName = getString("ownerName").orEmpty(),
+            title = getString("title").orEmpty(),
+            description = getString("description").orEmpty(),
+            category = categoryFromStored(getString("category")) ?: TaskCategory.OTHER,
+            taskType = enumFromStored<TaskType>(getString("taskType")) ?: TaskType.VOLUNTEER,
+            amount = getDouble("amount") ?: 0.0,
+            acceptedPaymentMethods = getStringList("acceptedPaymentMethods").mapNotNull { enumFromStored<PaymentMethod>(it) },
+            location = getString("location").orEmpty(),
+            status = status,
+            assignedHelperId = getString("assignedHelperId").orEmpty(),
+            assignedHelperName = getString("assignedHelperName").orEmpty(),
+            agreedPaymentMethod = enumFromStored<PaymentMethod>(getString("agreedPaymentMethod")),
+            createdAt = getLong("createdAt") ?: 0L
+        )
+    } catch (_: Exception) { null }
+}
 private fun DocumentSnapshot.toApplication(): TaskApplication? = try {
-    TaskApplication(id, getString("taskId").orEmpty(), getString("helperId").orEmpty(), getString("helperName").orEmpty(),
-        getString("preferredPaymentMethod").orEmpty(), getString("status") ?: "PENDING", getLong("createdAt") ?: 0L)
+    TaskApplication(
+        id = id,
+        taskId = getString("taskId").orEmpty(),
+        helperId = getString("helperId").orEmpty(),
+        helperName = getString("helperName").orEmpty(),
+        preferredPaymentMethod = enumFromStored<PaymentMethod>(getString("preferredPaymentMethod")),
+        status = enumFromStored<ApplicationStatus>(getString("status")) ?: ApplicationStatus.PENDING,
+        createdAt = getLong("createdAt") ?: 0L
+    )
 } catch (_: Exception) { null }
 private fun DocumentSnapshot.toPayment(): PaymentRecord? = try {
-    PaymentRecord(id, getString("taskId").orEmpty(), getString("taskTitle").orEmpty(), getString("payerId").orEmpty(),
-        getString("payeeId").orEmpty(), getString("otherPartyName").orEmpty(), getDouble("amount") ?: 0.0,
-        getString("method").orEmpty(), getString("status") ?: "PENDING", getLong("updatedAt") ?: 0L)
+    PaymentRecord(
+        id = id,
+        taskId = getString("taskId").orEmpty(),
+        taskTitle = getString("taskTitle").orEmpty(),
+        payerId = getString("payerId").orEmpty(),
+        payeeId = getString("payeeId").orEmpty(),
+        otherPartyName = getString("otherPartyName").orEmpty(),
+        amount = getDouble("amount") ?: 0.0,
+        method = enumFromStored<PaymentMethod>(getString("method")),
+        status = enumFromStored<PaymentStatus>(getString("status")) ?: PaymentStatus.PENDING,
+        updatedAt = getLong("updatedAt") ?: 0L
+    )
 } catch (_: Exception) { null }

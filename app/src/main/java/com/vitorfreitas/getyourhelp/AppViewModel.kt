@@ -4,9 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vitorfreitas.getyourhelp.data.AppUser
 import com.vitorfreitas.getyourhelp.data.MarketplaceRepository
+import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.PaymentRecord
 import com.vitorfreitas.getyourhelp.data.TaskApplication
+import com.vitorfreitas.getyourhelp.data.TaskCategory
 import com.vitorfreitas.getyourhelp.data.TaskItem
+import com.vitorfreitas.getyourhelp.data.TaskType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,16 +22,19 @@ import kotlin.coroutines.cancellation.CancellationException
 /**
  * Everything the screens display, in one immutable object.
  * - user: null means signed out, so the login screen is shown
+ * - checkingSession: true at start-up while the app checks whether someone is already signed in
+ * - tasksLoaded: false until the first list of tasks arrives from Firestore
  * - busy: an action is running, so buttons are disabled
- * - message / error: text shown in the banner at the top of the screen
+ * - message / error: text shown in a snackbar (while signed out, errors appear under the login form)
  */
 data class MarketplaceState(
     val user: AppUser? = null,
+    val checkingSession: Boolean = false,
     val tasks: List<TaskItem> = emptyList(),
+    val tasksLoaded: Boolean = false,
     val myApplications: List<TaskApplication> = emptyList(),
     val selectedTaskApplications: List<TaskApplication> = emptyList(),
     val payments: List<PaymentRecord> = emptyList(),
-    val loading: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
     val error: String? = null
@@ -41,7 +47,7 @@ data class MarketplaceState(
  */
 class AppViewModel : ViewModel() {
     private val repository = MarketplaceRepository()
-    private val _state = MutableStateFlow(MarketplaceState())
+    private val _state = MutableStateFlow(MarketplaceState(checkingSession = true))
     val state = _state.asStateFlow()
     private var taskObserverJob: Job? = null
 
@@ -50,12 +56,12 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val current = repository.currentUser()
-                _state.update { it.copy(user = current, loading = false) }
+                _state.update { it.copy(user = current, checkingSession = false) }
                 if (current != null) startTaskObserver()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(loading = false, error = e.message ?: "Could not restore the session.") }
+                _state.update { it.copy(checkingSession = false, error = e.message ?: "Could not restore the session.") }
             }
         }
     }
@@ -68,12 +74,12 @@ class AppViewModel : ViewModel() {
         taskObserverJob = viewModelScope.launch {
             try {
                 repository.observeTasks().collect { tasks ->
-                    _state.update { it.copy(tasks = tasks, loading = false) }
+                    _state.update { it.copy(tasks = tasks, tasksLoaded = true) }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(loading = false, error = e.message ?: "Could not load tasks.") }
+                _state.update { it.copy(tasksLoaded = true, error = e.message ?: "Could not load tasks.") }
             }
         }
     }
@@ -99,10 +105,18 @@ class AppViewModel : ViewModel() {
         _state.update { MarketplaceState(message = "Signed out.") }
     }
 
-    fun createTask(title: String, description: String, category: String, type: String, amount: String, methods: List<String>, location: String) = runAction {
+    fun createTask(
+        title: String,
+        description: String,
+        category: TaskCategory,
+        type: TaskType,
+        amount: String,
+        methods: List<PaymentMethod>,
+        location: String
+    ) = runAction {
         val user = state.value.user ?: error("Please sign in first.")
         repository.createTask(user, title, description, category, type,
-            if (type == "PAID") amount.toDoubleOrNull() ?: 0.0 else 0.0, methods, location)
+            if (type == TaskType.PAID) amount.toDoubleOrNull() ?: 0.0 else 0.0, methods, location)
         _state.update { it.copy(message = "Task published.") }
     }
 
@@ -111,7 +125,7 @@ class AppViewModel : ViewModel() {
         _state.update { it.copy(selectedTaskApplications = applications) }
     }
 
-    fun apply(task: TaskItem, method: String) = runAction {
+    fun applyToTask(task: TaskItem, method: PaymentMethod?) = runAction {
         val user = state.value.user ?: error("Please sign in first.")
         repository.applyToTask(task, user, method)
         _state.update { it.copy(message = "Application submitted.") }
@@ -150,7 +164,7 @@ class AppViewModel : ViewModel() {
         refreshMyData()
     }
 
-    fun updateCategories(categories: List<String>) = runAction {
+    fun updateCategories(categories: List<TaskCategory>) = runAction {
         val user = state.value.user ?: error("Please sign in first.")
         val updated = repository.updateHelperCategories(user, categories)
         _state.update { it.copy(user = updated, message = "Helper categories updated.") }

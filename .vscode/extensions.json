@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "fwcd.kotlin",
+    "rnoro.vscode-ktlint-formatter",
+    "vscjava.vscode-gradle",
+    "vscjava.vscode-maven",
+    "redhat.vscode-xml"
+  ]
+}
