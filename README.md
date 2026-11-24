@@ -43,7 +43,7 @@ The app does not process money. Payments are agreed between the two people (cash
 | Authentication | Firebase Authentication (email/password, and Google with Credential Manager) |
 | Database       | Cloud Firestore with live listeners, protected by security rules             |
 | Location       | Fused Location Provider (GPS) and Android's Geocoder, maps via a `geo:` link |
-| Testing        | JUnit 4 unit tests                                                           |
+| Testing        | JUnit 4 unit tests, kept on the `unit-tests` branch                          |
 | Build          | Gradle (Kotlin DSL), Android Gradle Plugin                                   |
 
 ## Requirements
@@ -105,13 +105,14 @@ To build from the command line:
 
 The APK is written to `app/build/outputs/apk/debug/`.
 
-### 4. Run the unit tests
+### 4. Unit tests
+
+To keep the main branch small, the unit tests live on the `unit-tests` branch:
 
 ```bash
+git checkout unit-tests
 ./gradlew :app:testDebugUnitTest
 ```
-
-The tests (in `app/src/test`) cover the form validation, the sign-in error messages, how My Tasks groups tasks, the date and time conversions of the task scheduler, distances and place names, the Browse filters and sorting, and how the chat groups messages by day.
 
 ## How to use
 
@@ -183,7 +184,6 @@ GetYourHelpAndroid/
 │       │           ├── chat/         ChatScreen, ChatViewModel
 │       │           ├── wallet/       WalletScreen
 │       │           └── profile/      ProfileScreen
-│       └── test/                   unit tests
 ├── build.gradle.kts
 ├── settings.gradle.kts
 ├── gradle.properties
@@ -201,7 +201,7 @@ GetYourHelpAndroid/
 | `data/ErrorMessages.kt`             | Turns Firebase errors into short, friendly messages                                                                    |
 | `auth/GoogleSignInHelper.kt`        | Shows the Google account picker (Credential Manager) and returns a Google ID token for Firebase                       |
 | `location/`                         | Reads the GPS position, looks up place names, calculates distances and opens Google Maps                              |
-| `validation/`                       | Form validation rules, in plain Kotlin so they can be unit tested                                                      |
+| `validation/`                       | Form validation rules, in plain Kotlin                                                                                 |
 | `ui/GetYourHelpApp.kt`              | Root composable: loading spinner, login screen or the signed-in app, and the snackbar messages                        |
 | `ui/theme/`                         | Brand colours (light and dark), the Plus Jakarta Sans font and shapes                                                  |
 | `ui/navigation/`                    | Routes (one class per screen), the bottom navigation bar, and the `NavHost` that connects screens to their ViewModels |

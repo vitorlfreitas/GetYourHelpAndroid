@@ -38,7 +38,6 @@ kotlin {
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
-    androidTestImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.13.0")
@@ -71,7 +70,4 @@ dependencies {
     implementation("androidx.credentials:credentials:1.6.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.2.1")
-
-    // Local unit tests (src/test), run with ./gradlew :app:testDebugUnitTest
-    testImplementation("junit:junit:4.13.2")
 }
