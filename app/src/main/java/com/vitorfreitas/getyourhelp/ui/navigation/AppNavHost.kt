@@ -17,11 +17,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.toRoute
 import com.vitorfreitas.getyourhelp.AppViewModel
+import com.vitorfreitas.getyourhelp.data.AppUser
 import com.vitorfreitas.getyourhelp.location.openInMaps
 import com.vitorfreitas.getyourhelp.ui.browse.BrowseScreen
 import com.vitorfreitas.getyourhelp.ui.chat.ChatScreen
 import com.vitorfreitas.getyourhelp.ui.chat.ChatViewModel
-import com.vitorfreitas.getyourhelp.ui.components.LoadingIndicator
 import com.vitorfreitas.getyourhelp.ui.create.TaskFormMode
 import com.vitorfreitas.getyourhelp.ui.create.TaskFormScreen
 import com.vitorfreitas.getyourhelp.ui.create.TaskFormViewModel
@@ -35,14 +35,24 @@ import com.vitorfreitas.getyourhelp.ui.wallet.WalletScreen
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Connects each route to its screen. Screens only receive data and callbacks; this is the one place
- * that reads the ViewModels and decides where each button navigates.
- * - [appVm] holds the data shared by all screens (session, tasks, applications, wallet, location)
- * - the task form, Task Details and Chat get their own ViewModel, created with `viewModel(factory = ...)`.
- *   It lives as long as that screen is in the back stack and is cleared when the screen is closed.
+ * Connects each route to its screen: the one place that reads the ViewModels and decides where
+ * each button goes. The task form, Task Details and Chat get their own ViewModel, which lives as
+ * long as that screen is in the back stack.
  */
 @Composable
-fun AppNavHost(appVm: AppViewModel, navController: NavHostController, modifier: Modifier = Modifier) {
+fun AppNavHost(appVm: AppViewModel, user: AppUser, navController: NavHostController, modifier: Modifier = Modifier) {
+    val appState by appVm.state.collectAsStateWithLifecycle()
+    val myLocation by appVm.myLocation.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Taps during a screen transition are ignored, so a double tap cannot open a screen twice
+    fun NavBackStackEntry.open(route: Any) {
+        if (lifecycle.currentState == Lifecycle.State.RESUMED) navController.navigate(route)
+    }
+    fun NavBackStackEntry.back() {
+        if (lifecycle.currentState == Lifecycle.State.RESUMED) navController.navigateUp()
+    }
+
     NavHost(
         navController = navController,
         startDestination = BrowseRoute,
@@ -51,131 +61,72 @@ fun AppNavHost(appVm: AppViewModel, navController: NavHostController, modifier: 
         exitTransition = { fadeOut(tween(250)) }
     ) {
         composable<BrowseRoute> { entry ->
-            val state by appVm.state.collectAsStateWithLifecycle()
-            val myLocation by appVm.myLocation.collectAsStateWithLifecycle()
-            val user = state.user ?: return@composable
             BrowseScreen(
-                tasks = state.tasks,
-                tasksLoaded = state.tasksLoaded,
-                user = user,
-                myLocation = myLocation,
-                locating = state.locating,
-                onRefreshLocation = appVm::refreshLocation,
+                tasks = appState.tasks, tasksLoaded = appState.tasksLoaded, user = user, myLocation = myLocation,
+                locating = appState.locating, onRefreshLocation = appVm::refreshLocation,
                 onLocationDenied = appVm::locationPermissionDenied,
-                onOpenTask = { task -> if (entry.isResumed()) navController.navigate(TaskDetailRoute(task.id)) },
-                onCreateTask = { if (entry.isResumed()) navController.navigate(CreateTaskRoute) }
+                onOpenTask = { entry.open(TaskDetailRoute(it.id)) }, onCreateTask = { entry.open(CreateTaskRoute) }
             )
         }
         composable<MyTasksRoute> { entry ->
-            val state by appVm.state.collectAsStateWithLifecycle()
-            val myLocation by appVm.myLocation.collectAsStateWithLifecycle()
-            val user = state.user ?: return@composable
             MyTasksScreen(
-                tasks = state.tasks,
-                applications = state.myApplications,
-                user = user,
-                myLocation = myLocation,
-                onOpenTask = { task -> if (entry.isResumed()) navController.navigate(TaskDetailRoute(task.id)) },
-                onCreateTask = { if (entry.isResumed()) navController.navigate(CreateTaskRoute) }
+                tasks = appState.tasks, applications = appState.myApplications, user = user, myLocation = myLocation,
+                onOpenTask = { entry.open(TaskDetailRoute(it.id)) }, onCreateTask = { entry.open(CreateTaskRoute) }
             )
         }
         composable<WalletRoute> {
-            val state by appVm.state.collectAsStateWithLifecycle()
-            val user = state.user ?: return@composable
             LaunchedEffect(Unit) { appVm.refreshPayments() }
-            WalletScreen(payments = state.payments, userId = user.uid, busy = state.busy, onMarkPaid = appVm::markPayment)
+            WalletScreen(payments = appState.payments, userId = user.uid, busy = appState.busy, onMarkPaid = appVm::markPayment)
         }
         composable<ProfileRoute> {
-            val state by appVm.state.collectAsStateWithLifecycle()
-            val user = state.user ?: return@composable
-            ProfileScreen(
-                user = user,
-                busy = state.busy,
-                onSaveCategories = appVm::updateCategories,
-                onSignOut = appVm::signOut
-            )
+            ProfileScreen(user = user, busy = appState.busy, onSaveCategories = appVm::updateCategories, onSignOut = appVm::signOut)
         }
         composable<CreateTaskRoute> { entry ->
-            val appState by appVm.state.collectAsStateWithLifecycle()
-            val user = appState.user ?: return@composable
             val formVm: TaskFormViewModel = viewModel(factory = TaskFormViewModel.CreateFactory)
             val state by formVm.state.collectAsStateWithLifecycle()
-            // Once the task is saved, open it. The form is removed from the back stack, so Back
-            // from the new task returns to where the user started instead of to an empty form.
+            // Open the new task. The form leaves the back stack, so Back returns to where the user started.
             LaunchedEffect(state.savedTaskId) {
-                state.savedTaskId?.let { taskId ->
-                    navController.navigate(TaskDetailRoute(taskId)) {
-                        popUpTo<CreateTaskRoute> { inclusive = true }
-                    }
-                }
+                state.savedTaskId?.let { navController.navigate(TaskDetailRoute(it)) { popUpTo<CreateTaskRoute> { inclusive = true } } }
             }
             TaskFormScreen(
-                mode = TaskFormMode.CREATE,
-                initial = state.initial ?: return@composable,
-                paymentLocked = false,
-                busy = state.busy,
-                locating = state.locating,
-                locationFill = state.locationFill,
-                onUseCurrentLocation = formVm::useCurrentLocation,
-                onLocationDenied = appVm::locationPermissionDenied,
-                onSubmit = { input -> formVm.submit(user, input) },
-                onBack = { if (entry.isResumed()) navController.navigateUp() }
+                TaskFormMode.CREATE, state, onUseCurrentLocation = formVm::useCurrentLocation,
+                onLocationDenied = appVm::locationPermissionDenied, onSubmit = { formVm.submit(user, it) }, onBack = { entry.back() }
             )
         }
         composable<EditTaskRoute> { entry ->
-            val appState by appVm.state.collectAsStateWithLifecycle()
-            val user = appState.user ?: return@composable
             val formVm: TaskFormViewModel = viewModel(factory = TaskFormViewModel.EditFactory)
             val state by formVm.state.collectAsStateWithLifecycle()
-            // Back to the task once it is saved (the details page is live, so it shows the changes),
-            // or straight away if the task could not be opened for editing.
+            // Back to the (live) task once saved, or straight away if it could not be opened
             LaunchedEffect(state.savedTaskId, state.loadFailed) {
                 if (state.savedTaskId != null || state.loadFailed) navController.navigateUp()
             }
-            val initial = state.initial
-            if (initial == null) {
-                LoadingIndicator()
-            } else {
-                TaskFormScreen(
-                    mode = TaskFormMode.EDIT,
-                    initial = initial,
-                    paymentLocked = state.paymentLocked,
-                    busy = state.busy,
-                    locating = state.locating,
-                    locationFill = state.locationFill,
-                    onUseCurrentLocation = formVm::useCurrentLocation,
-                    onLocationDenied = appVm::locationPermissionDenied,
-                    onSubmit = { input -> formVm.submit(user, input) },
-                    onBack = { if (entry.isResumed()) navController.navigateUp() }
-                )
-            }
+            TaskFormScreen(
+                TaskFormMode.EDIT, state, onUseCurrentLocation = formVm::useCurrentLocation,
+                onLocationDenied = appVm::locationPermissionDenied, onSubmit = { formVm.submit(user, it) }, onBack = { entry.back() }
+            )
         }
         composable<TaskDetailRoute> { entry ->
-            val appState by appVm.state.collectAsStateWithLifecycle()
-            val myLocation by appVm.myLocation.collectAsStateWithLifecycle()
-            val user = appState.user ?: return@composable
             val taskId = entry.toRoute<TaskDetailRoute>().taskId
             val detailVm: TaskDetailViewModel = viewModel(factory = TaskDetailViewModel.Factory)
             val state by detailVm.state.collectAsStateWithLifecycle()
-            val context = LocalContext.current
-            // For "1.2 km from you": read the position if the user already allowed location
+            // For "1.2 km from you": read the position if location is already allowed
             LaunchedEffect(Unit) { appVm.refreshLocationIfAllowed() }
             TaskDetailScreen(
                 state = state,
                 user = user,
                 myLocation = myLocation,
                 actions = TaskDetailActions(
-                    onBack = { if (entry.isResumed()) navController.navigateUp() },
+                    onBack = { entry.back() },
                     onApply = { method, message -> detailVm.applyForTask(user, method, message) },
                     onWithdraw = detailVm::withdraw,
                     onAccept = detailVm::accept,
                     onDecline = detailVm::decline,
-                    onEdit = { if (entry.isResumed()) navController.navigate(EditTaskRoute(taskId)) },
+                    onEdit = { entry.open(EditTaskRoute(taskId)) },
                     onCancelTask = detailVm::cancelTask,
                     onMarkWorkDone = detailVm::markWorkDone,
                     onConfirmCompleted = detailVm::confirmCompleted,
                     onWorkNotFinished = detailVm::markWorkNotFinished,
-                    onOpenChat = { if (entry.isResumed()) navController.navigate(ChatRoute(taskId)) },
+                    onOpenChat = { entry.open(ChatRoute(taskId)) },
                     onOpenMaps = { task ->
                         if (!openInMaps(context, task.location, task.coordinates)) appVm.showMessage("No app on this phone can open maps.")
                     },
@@ -185,23 +136,12 @@ fun AppNavHost(appVm: AppViewModel, navController: NavHostController, modifier: 
             )
         }
         composable<ChatRoute> { entry ->
-            val appState by appVm.state.collectAsStateWithLifecycle()
-            val user = appState.user ?: return@composable
             val chatVm: ChatViewModel = viewModel(factory = ChatViewModel.Factory)
             val state by chatVm.state.collectAsStateWithLifecycle()
             ChatScreen(
-                state = state,
-                user = user,
-                onSend = { text -> chatVm.send(user, text) },
-                onUnsentTextRestored = chatVm::unsentTextRestored,
-                onBack = { if (entry.isResumed()) navController.navigateUp() }
+                state = state, user = user, onSend = { chatVm.send(user, it) },
+                onUnsentTextRestored = chatVm::unsentTextRestored, onBack = { entry.back() }
             )
         }
     }
 }
-
-/**
- * True when the screen is fully shown. Clicks are ignored during the transition between screens,
- * so a quick double tap cannot open the same screen twice or go back two screens.
- */
-private fun NavBackStackEntry.isResumed() = lifecycle.currentState == Lifecycle.State.RESUMED

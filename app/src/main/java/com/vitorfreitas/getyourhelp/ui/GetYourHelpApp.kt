@@ -28,11 +28,8 @@ import kotlinx.coroutines.launch
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Root of the UI. While the saved session is being checked it shows a spinner, then either the
- * login screen or the signed-in app ([MainScaffold]).
- *
- * Messages queued by any ViewModel (see [UserMessenger]) are shown here one at a time as snackbars,
- * so they stay visible when the screen changes (e.g. "Task published." while the new task opens).
+ * Root of the UI: a spinner while the saved session is checked, then the login screen or the app.
+ * Queued messages ([UserMessenger]) are shown here one at a time, so they survive screen changes.
  */
 @Composable
 fun GetYourHelpApp(vm: AppViewModel, googleSignIn: GoogleSignInHelper) {
@@ -52,8 +49,7 @@ fun GetYourHelpApp(vm: AppViewModel, googleSignIn: GoogleSignInHelper) {
         }
     }
 
-    // The Google account picker is drawn over the activity, so it runs here (in the UI) instead of
-    // in the ViewModel, which must not keep a reference to the activity.
+    // The Google account picker needs the activity, which a ViewModel must not keep, so it runs here
     val activityContext = LocalContext.current
     val scope = rememberCoroutineScope()
     var choosingAccount by remember { mutableStateOf(false) }
@@ -91,6 +87,6 @@ fun GetYourHelpApp(vm: AppViewModel, googleSignIn: GoogleSignInHelper) {
                 modifier = Modifier.padding(padding).consumeWindowInsets(padding).imePadding()
             )
         }
-        else -> MainScaffold(vm = vm, snackbarHostState = snackbarHostState)
+        else -> MainScaffold(vm, user, snackbarHostState)
     }
 }

@@ -22,30 +22,30 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.vitorfreitas.getyourhelp.AppViewModel
+import com.vitorfreitas.getyourhelp.data.AppUser
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * The signed-in part of the app: the bottom navigation bar, the snackbar area and the screens.
- * The bar is shown on the main tabs and hidden on detail screens, which have a back arrow instead.
+ * The signed-in app: the bottom navigation bar (only on the main tabs; other screens have a back
+ * arrow), the snackbar area and the screens.
  */
 @Composable
-fun MainScaffold(vm: AppViewModel, snackbarHostState: SnackbarHostState) {
+fun MainScaffold(vm: AppViewModel, user: AppUser, snackbarHostState: SnackbarHostState) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
-    // Before the first screen is set up the destination is null; that is the start tab (Browse).
+    // Before the first screen is set up the destination is null: that is the start tab (Browse)
     val currentTab = if (currentDestination == null) TopLevelDestination.BROWSE
     else TopLevelDestination.entries.firstOrNull { currentDestination.hasRoute(it.route::class) }
     val showBottomBar = currentTab != null
     val onChat = currentDestination?.hasRoute(ChatRoute::class) == true
 
     Scaffold(
-        // Each screen has its own top bar, which already leaves room for the status bar.
+        // Each screen has its own top bar, which already leaves room for the status bar
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = {
-            // Without the bottom bar, keep snackbars above the system navigation bar and the keyboard,
-            // and in the chat also above the message field.
+            // Keep snackbars above the system bar and the keyboard (and in the chat, above the message field)
             SnackbarHost(
                 snackbarHostState,
                 when {
@@ -71,18 +71,13 @@ fun MainScaffold(vm: AppViewModel, snackbarHostState: SnackbarHostState) {
             }
         }
     ) { innerPadding ->
-        AppNavHost(
-            appVm = vm,
-            navController = navController,
-            modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)
-        )
+        AppNavHost(vm, user, navController, Modifier.padding(innerPadding).consumeWindowInsets(innerPadding))
     }
 }
 
 /**
- * Opens a tab the way bottom navigation should behave:
- * - only one copy of each tab is kept, and Back from any tab returns to Browse
- * - each tab keeps its state (scroll position, typed text) when you leave it and come back
+ * Opens a tab the usual bottom-navigation way: one copy of each tab, Back returns to Browse, and
+ * each tab keeps its scroll position and typed text.
  */
 private fun NavHostController.navigateToTab(tab: TopLevelDestination) {
     navigate(tab.route) {

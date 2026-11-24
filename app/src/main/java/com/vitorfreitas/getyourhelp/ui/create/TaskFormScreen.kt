@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.TaskCategory
 import com.vitorfreitas.getyourhelp.data.TaskType
+import com.vitorfreitas.getyourhelp.ui.components.LoadingIndicator
 import com.vitorfreitas.getyourhelp.ui.components.icon
 import com.vitorfreitas.getyourhelp.ui.components.rememberLocationAccess
 import com.vitorfreitas.getyourhelp.validation.TaskInput
@@ -71,26 +72,21 @@ enum class TaskFormMode(val title: String, val submitLabel: String) {
 }
 
 /**
- * Form to publish or edit a task. The fields are checked by [TaskValidator]: after the first tap on
- * the button, each invalid field shows what is wrong under it, and the message updates as the user types.
- * - [initial]: the values the fields start with
- * - [paymentLocked]: someone has applied, so the payment part is shown but cannot be changed
- * - [locationFill]: a place name found by "Use my current location", put into the location field
+ * Form to publish or edit a task. After the first tap on the button, each invalid field shows
+ * what is wrong under it ([TaskValidator]), updating as the user types.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TaskFormScreen(
     mode: TaskFormMode,
-    initial: TaskInput,
-    paymentLocked: Boolean,
-    busy: Boolean,
-    locating: Boolean,
-    locationFill: LocationFill?,
+    state: TaskFormState,
     onUseCurrentLocation: () -> Unit,
     onLocationDenied: () -> Unit,
     onSubmit: (TaskInput) -> Unit,
     onBack: () -> Unit
 ) {
+    val initial = state.initial ?: return LoadingIndicator() // the task to edit is still loading
+    val locationFill = state.locationFill
     // rememberSaveable keeps what was typed when the phone is rotated
     var title by rememberSaveable { mutableStateOf(initial.title) }
     var description by rememberSaveable { mutableStateOf(initial.description) }
@@ -201,14 +197,14 @@ fun TaskFormScreen(
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
                 modifier = Modifier.fillMaxWidth()
             )
-            TextButton(onClick = locationAccess.request, enabled = !locating && !busy) {
-                if (locating) {
+            TextButton(onClick = locationAccess.request, enabled = !state.locating && !state.busy) {
+                if (state.locating) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
                     Icon(Icons.Outlined.MyLocation, contentDescription = null, modifier = Modifier.size(18.dp))
                 }
                 Spacer(Modifier.width(8.dp))
-                Text(if (locating) "Finding your location…" else "Use my current location")
+                Text(if (state.locating) "Finding your location…" else "Use my current location")
             }
             ScheduleField(
                 scheduledAt = scheduledAt,
@@ -217,7 +213,7 @@ fun TaskFormScreen(
             )
 
             SectionTitle("Payment")
-            if (paymentLocked) {
+            if (state.paymentLocked) {
                 Row(Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Outlined.Lock,
@@ -238,7 +234,7 @@ fun TaskFormScreen(
                     SegmentedButton(
                         selected = type == option,
                         onClick = { type = option },
-                        enabled = !paymentLocked,
+                        enabled = !state.paymentLocked,
                         shape = SegmentedButtonDefaults.itemShape(index = index, count = TaskType.entries.size)
                     ) { Text(if (option == TaskType.PAID) "Paid task" else "Volunteer") }
                 }
@@ -251,7 +247,7 @@ fun TaskFormScreen(
                     label = { Text("Amount you will pay") },
                     prefix = { Text("€") },
                     placeholder = { Text("15.00") },
-                    enabled = !paymentLocked,
+                    enabled = !state.paymentLocked,
                     isError = shown(validation.amount) != null,
                     supportingText = { Text(shown(validation.amount) ?: "Paid outside the app, in person or by bank transfer.") },
                     singleLine = true,
@@ -260,8 +256,8 @@ fun TaskFormScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text("Accepted payment methods", style = MaterialTheme.typography.labelLarge)
-                CheckboxRow(PaymentMethod.CASH.label, cash, enabled = !paymentLocked) { cash = it }
-                CheckboxRow(PaymentMethod.BANK_TRANSFER.label, bank, enabled = !paymentLocked) { bank = it }
+                CheckboxRow(PaymentMethod.CASH.label, cash, enabled = !state.paymentLocked) { cash = it }
+                CheckboxRow(PaymentMethod.BANK_TRANSFER.label, bank, enabled = !state.paymentLocked) { bank = it }
                 shown(validation.paymentMethods)?.let { message ->
                     Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -279,10 +275,10 @@ fun TaskFormScreen(
                     showErrors = true
                     if (validation.isValid) onSubmit(input)
                 },
-                enabled = !busy,
+                enabled = !state.busy,
                 modifier = Modifier.fillMaxWidth().height(52.dp)
             ) {
-                if (busy) {
+                if (state.busy) {
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                 } else {
                     Text(mode.submitLabel)
