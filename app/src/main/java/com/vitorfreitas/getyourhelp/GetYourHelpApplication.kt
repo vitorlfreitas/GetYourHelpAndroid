@@ -11,21 +11,14 @@ import com.vitorfreitas.getyourhelp.ui.UserMessenger
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-/**
- * The Android application object, created once when the app starts (registered in AndroidManifest.xml).
- * It owns the [AppContainer] shared by all screens.
- */
+/** Created once when the app starts (registered in AndroidManifest.xml). Owns the [AppContainer]. */
 class GetYourHelpApplication : Application() {
     val container: AppContainer by lazy { AppContainer(this) }
 }
 
 /**
- * Objects shared by the whole app, created only once (simple manual dependency injection).
- * ViewModels receive them through their factories instead of creating their own copies.
- * - repository: Firebase Authentication and Cloud Firestore
- * - messenger: the queue of snackbar messages
- * - location: the GPS sensor and place-name lookups
- * - googleSignIn: the Google account picker for "Continue with Google"
+ * The objects shared by the whole app, created once (simple manual dependency injection).
+ * ViewModels get them through their factories: Firebase, the snackbar queue, GPS and Google sign-in.
  */
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext

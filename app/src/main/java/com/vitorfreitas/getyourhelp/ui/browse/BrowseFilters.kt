@@ -8,7 +8,7 @@ import com.vitorfreitas.getyourhelp.location.distanceKmOrNull
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-// How Browse filters and sorts the open tasks. Plain Kotlin, covered by unit tests.
+// How Browse filters and sorts the open tasks (plain Kotlin, no Android classes).
 
 enum class TaskSort(val label: String) {
     NEWEST("Newest first"),
@@ -32,12 +32,9 @@ data class BrowseFilters(
 data class BrowseItem(val task: TaskItem, val distanceKm: Double?)
 
 /**
- * The tasks Browse shows: open tasks from other users that match [filters].
- * - Without [myLocation], distances are unknown, so the distance filter and "Nearest first" cannot
- *   be applied yet and the list is shown newest first (the screen explains this).
- * - With a distance filter, tasks without a position are hidden, because their distance is unknown.
- * - "Nearest first" puts tasks without a position at the end.
- * [tasks] must be newest first, as the repository returns them.
+ * Open tasks from other users that match [filters], from [tasks] in newest-first order. Without
+ * [myLocation] the distance options can't apply yet. Tasks without a position are hidden by a
+ * distance filter and listed last by "Nearest first".
  */
 fun browseTasks(
     tasks: List<TaskItem>,

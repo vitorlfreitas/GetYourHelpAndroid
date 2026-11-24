@@ -29,10 +29,8 @@ import com.vitorfreitas.getyourhelp.ui.theme.AppTheme
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Summary of a task in a list: category icon, title, area, date, how far away it is, what the
- * helper gets and who posted it.
- * - [distanceKm]: distance from the user, shown as "1.2 km away" (null hides it, e.g. location unknown)
- * - [badge]: optional label for the top-right corner, e.g. the status of the user's application
+ * A task in a list. [distanceKm] shows "1.2 km away" when known; [badge] is an optional label for the
+ * top-right corner, e.g. the status of the user's application.
  */
 @Composable
 fun TaskCard(

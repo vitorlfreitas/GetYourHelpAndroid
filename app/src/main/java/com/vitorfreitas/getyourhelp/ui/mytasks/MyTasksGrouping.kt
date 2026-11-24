@@ -7,48 +7,32 @@ import com.vitorfreitas.getyourhelp.data.TaskStatus
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-// How the My Tasks screen sorts tasks into groups. Plain Kotlin, covered by unit tests.
+// How My Tasks sorts tasks into groups (plain Kotlin, no Android classes).
 
-/**
- * The groups in each My Tasks tab. WAITING is shown as "Open" for tasks the user posted, and as
- * "Applied" for tasks the user applied to. CANCELLED is only used for tasks the user posted.
- */
+/** WAITING is "Open" for the user's own tasks and "Applied" for tasks they applied to. */
 enum class TaskStage { WAITING, ONGOING, COMPLETED, CANCELLED }
 
-/** A task in the Helping tab, with the user's application for it (null for old data without one). */
+/** A task in the Helping tab, with the user's application for it. */
 data class HelpingItem(val task: TaskItem, val application: TaskApplication?) {
-    /**
-     * The application status to show. If the task went to someone else while this application was
-     * still pending, it is shown as declined.
-     */
+    /** A pending application for a task that went to someone else is shown as declined. */
     val displayStatus: ApplicationStatus?
         get() = application?.status?.let { status ->
             if (status == ApplicationStatus.PENDING && task.status != TaskStatus.OPEN) ApplicationStatus.DECLINED else status
         }
 
-    /** The requester cancelled the task after the user applied. */
-    val taskCancelled: Boolean
-        get() = task.status == TaskStatus.CANCELLED
+    val taskCancelled: Boolean get() = task.status == TaskStatus.CANCELLED
 }
 
-/**
- * Tasks the user posted: OPEN -> Open, ASSIGNED -> Ongoing, COMPLETED -> Completed,
- * CANCELLED -> Cancelled. Keeps the newest-first order.
- */
+/** The tasks the user posted, by status, newest first. */
 fun requestedTasksByStage(tasks: List<TaskItem>, userId: String): Map<TaskStage, List<TaskItem>> {
     val mine = tasks.filter { it.ownerId == userId }
     return TaskStage.entries.associateWith { stage -> mine.filter { it.stage() == stage } }
 }
 
 /**
- * Tasks the user is involved in as a helper:
- * - WAITING ("Applied"): applications that were not accepted (yet): pending, declined, withdrawn,
- *   the task went to another helper, or the requester cancelled it. Newest application first.
- * - ONGOING and COMPLETED: tasks where the user is the accepted helper.
- * - CANCELLED: always empty here (a cancelled task the user applied to stays under "Applied").
- *
- * [applications] must be newest first (as the repository returns them), so that old duplicate
- * applications for the same task are hidden behind the latest one.
+ * The tasks the user helps with. "Applied" lists every application that was not accepted (pending,
+ * declined, withdrawn, given to someone else or cancelled); Ongoing and Completed are the tasks the
+ * user was accepted for. [applications] must be newest first, so only the latest one per task is kept.
  */
 fun helpingTasksByStage(
     tasks: List<TaskItem>,

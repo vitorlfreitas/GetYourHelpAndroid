@@ -9,7 +9,7 @@ import java.util.TimeZone
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-// How the chat screen lays out its messages. Plain Kotlin, covered by unit tests.
+// How the chat screen lays out its messages (plain Kotlin, no Android classes).
 
 /** One row of the chat list: a date header, or a message bubble. [key] identifies the row in the list. */
 sealed interface ChatRow {

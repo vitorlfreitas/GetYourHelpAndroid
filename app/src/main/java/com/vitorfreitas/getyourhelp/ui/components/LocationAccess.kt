@@ -15,17 +15,10 @@ import com.vitorfreitas.getyourhelp.location.hasLocationPermission
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-/**
- * Location permission for a screen.
- * - granted: the user allowed location (rechecked whenever the screen comes back, e.g. from Settings)
- * - request(): runs onGranted straight away if allowed, otherwise asks first
- */
+/** Location permission for a screen. request() runs onGranted at once if allowed, otherwise asks first. */
 class LocationAccess(val granted: Boolean, val request: () -> Unit)
 
-/**
- * Asks for location only when the user does something that needs it (for example "Use my current
- * location"), not when the app opens. [onGranted] runs once permission is given, [onDenied] if the user says no.
- */
+/** Asks for location only when the user does something that needs it, not when the app opens. */
 @Composable
 fun rememberLocationAccess(onGranted: () -> Unit, onDenied: () -> Unit): LocationAccess {
     val context = LocalContext.current

@@ -52,11 +52,8 @@ import com.vitorfreitas.getyourhelp.ui.components.WorkDonePill
 private enum class MyTasksTab(val label: String) { REQUESTED("Requested"), HELPING("Helping") }
 
 /**
- * The user's tasks in two tabs, as described in the proposal:
- * - Requested: tasks the user posted, as Open / Ongoing / Completed (and Cancelled, once there are any)
- * - Helping: tasks the user applied to, as Applied / Ongoing / Completed
- * The lists are live, so a task moves to Ongoing as soon as a helper is accepted. An ongoing task
- * shows "Work done" once the helper has marked it, until the requester confirms.
+ * The user's tasks in two live tabs, as in the proposal: Requested (Open / Ongoing / Completed /
+ * Cancelled) and Helping (Applied / Ongoing / Completed).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -141,11 +138,7 @@ fun MyTasksScreen(
     }
 }
 
-/**
- * The badge on a Helping card:
- * - Applied: what happened to the application, or "Cancelled" if the requester cancelled the task
- * - Ongoing: "Work done" once the user has marked it, while the requester has not confirmed yet
- */
+/** The badge on a Helping card: what happened to the application, or "Work done" while waiting for the requester. */
 private fun helpingBadge(item: HelpingItem, stage: TaskStage): (@Composable () -> Unit)? {
     val status = item.displayStatus
     return when {

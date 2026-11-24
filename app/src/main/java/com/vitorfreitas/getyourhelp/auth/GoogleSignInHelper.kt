@@ -18,34 +18,24 @@ import kotlin.coroutines.cancellation.CancellationException
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-/** What happened when the user was asked to pick a Google account. */
+/** What happened when the user was asked to pick a Google account. The ID token proves it to Firebase. */
 sealed interface GoogleSignInResult {
-    /** The user picked an account. The ID token proves it to Firebase. */
     data class Success(val idToken: String) : GoogleSignInResult
-
-    /** The user closed the account picker. */
     data object Cancelled : GoogleSignInResult
-
     data class Failure(val message: String) : GoogleSignInResult
 }
 
 /**
- * "Continue with Google", using Android's Credential Manager:
- * 1. [requestIdToken] shows the system's Google account picker and returns a Google ID token
- * 2. MarketplaceRepository.signInWithGoogle exchanges the token for a Firebase Authentication session
- *
- * It needs the Google provider enabled in the Firebase console, the app's SHA-1 fingerprint added to
- * the Firebase project, and a google-services.json downloaded after those two steps.
+ * "Continue with Google" with Android's Credential Manager: [requestIdToken] shows the account picker
+ * and returns a Google ID token, which MarketplaceRepository exchanges for a Firebase session.
+ * Needs the Google provider and the app's SHA-1 in Firebase, and a google-services.json downloaded after.
  */
 class GoogleSignInHelper(private val appContext: Context) {
 
-    /** The OAuth "web client" id. The google-services plugin generates it from google-services.json. */
+    /** The OAuth "web client" id, generated from google-services.json. */
     private val webClientId: String? = findWebClientId(appContext)
 
-    /**
-     * Shows the account picker. [activityContext] must be the current activity, because Credential
-     * Manager draws its picker on top of it.
-     */
+    /** Shows the account picker on top of [activityContext], the current activity. */
     suspend fun requestIdToken(activityContext: Context): GoogleSignInResult {
         val clientId = webClientId ?: return GoogleSignInResult.Failure(
             withDetails(
@@ -105,9 +95,8 @@ class GoogleSignInHelper(private val appContext: Context) {
 }
 
 /**
- * Reads the generated string resource "default_web_client_id" by name. It only exists once Google
- * sign-in is set up in Firebase, so referring to it as R.string.default_web_client_id would stop the
- * app from compiling until then.
+ * Reads "default_web_client_id" by name: it only exists once Google sign-in is set up in Firebase, so
+ * using R.string.default_web_client_id would stop the app from compiling until then.
  */
 @SuppressLint("DiscouragedApi")
 private fun findWebClientId(context: Context): String? {

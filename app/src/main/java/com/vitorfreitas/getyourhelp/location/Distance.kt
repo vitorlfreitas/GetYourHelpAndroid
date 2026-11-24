@@ -11,7 +11,7 @@ import kotlin.math.sqrt
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-// Distances and place names. Plain Kotlin (no Android classes), covered by unit tests.
+// Distances and place names (plain Kotlin, no Android classes).
 
 /** Mean radius of the Earth in kilometres. */
 private const val EARTH_RADIUS_KM = 6371.0088

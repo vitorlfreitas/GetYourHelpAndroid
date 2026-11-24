@@ -59,7 +59,7 @@ data class TaskValidation(
 }
 
 /**
- * Form validation for creating a task. Plain Kotlin (no Android classes), covered by unit tests.
+ * Form validation for creating a task. Plain Kotlin (no Android classes).
  * The limits below are also shown to the user as character counters.
  */
 object TaskValidator {

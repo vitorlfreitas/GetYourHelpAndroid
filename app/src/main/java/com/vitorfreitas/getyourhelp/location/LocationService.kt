@@ -37,32 +37,25 @@ fun hasLocationPermission(context: Context): Boolean =
     LOCATION_PERMISSIONS.any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
 
 /**
- * The phone's GPS sensor and the place-name lookups (geocoding).
- * - [currentLocation] reads the position with the fused location provider from Google Play services
- * - [areaName] turns a position into a place name ("Ranelagh, Dublin")
- * - [coordinatesOf] turns a typed place name into a position, so typed locations get distances too
- *
- * The user's own position is only kept in memory ([myLocation]) and is never saved to Firestore.
+ * The GPS sensor (fused location provider from Google Play services) and place-name lookups
+ * (geocoding) in both directions. The user's own position is only kept in memory, never saved.
  */
 class LocationService(private val context: Context) {
     private val fusedClient by lazy { LocationServices.getFusedLocationProviderClient(context) }
     private val _myLocation = MutableStateFlow<Coordinates?>(null)
 
-    /** Where the user was the last time the position was read (null until then). Used to show distances. */
+    /** The last position read (null until then), for the distances on screen. */
     val myLocation: StateFlow<Coordinates?> = _myLocation.asStateFlow()
 
     fun hasPermission(): Boolean = hasLocationPermission(context)
 
-    /**
-     * Reads the current position, or returns null if permission is missing, location is turned off,
-     * or no position arrives within a few seconds (the last known position is used as a fallback).
-     */
+    /** The current position (or the last known one), or null without permission, with location off or on timeout. */
     @SuppressLint("MissingPermission") // hasPermission() is checked first
     suspend fun currentLocation(): Coordinates? {
         if (!hasPermission()) return null
         val precise = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
-        // A one-off reading, so high accuracy costs little battery. With approximate permission, balanced is the best available.
+        // A single reading, so high accuracy costs little battery
         val priority = if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
         val location = try {
             val cancellation = CancellationTokenSource()
@@ -111,10 +104,7 @@ class LocationService(private val context: Context) {
         }
     }?.takeIf { it.hasLatitude() && it.hasLongitude() }?.let { Coordinates(it.latitude, it.longitude) }
 
-    /**
-     * Runs a geocoder lookup. The geocoder needs an internet connection and a geocoding service on
-     * the phone (part of Google Play services), so every failure simply returns null.
-     */
+    /** A geocoder lookup. It needs internet and Google Play services, so any failure just gives null. */
     private suspend fun lookUp(block: suspend (Geocoder) -> Address?): Address? {
         if (!Geocoder.isPresent()) return null
         return try {

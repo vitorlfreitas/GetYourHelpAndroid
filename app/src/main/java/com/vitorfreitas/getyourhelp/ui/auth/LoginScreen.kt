@@ -66,10 +66,8 @@ import com.vitorfreitas.getyourhelp.validation.AuthValidator
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Sign in, or create an account, with email and password or with "Continue with Google".
- * Field errors appear after the first attempt to submit, and then update as the user types.
- * [error] is the reason the last attempt failed (e.g. a wrong password).
- * [busy] is true while signing in with email, [googleBusy] while signing in with Google.
+ * Sign in or create an account, with email and password or with Google. Field errors appear after
+ * the first submit; [error] says why the last attempt failed.
  */
 @Composable
 fun LoginScreen(

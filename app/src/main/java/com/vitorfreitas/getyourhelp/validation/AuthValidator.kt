@@ -5,7 +5,7 @@ package com.vitorfreitas.getyourhelp.validation
 /**
  * Checks for the sign-in and registration forms.
  * Each function returns an error message to show under the field, or null when the value is fine.
- * Plain Kotlin (no Android classes), so it is covered by unit tests in src/test.
+ * Plain Kotlin (no Android classes).
  */
 object AuthValidator {
     /** Firebase Authentication rejects shorter passwords. */

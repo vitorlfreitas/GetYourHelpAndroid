@@ -6,7 +6,7 @@ import java.util.TimeZone
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 // The Material date picker represents a day as midnight UTC of that day, while a task's time is in
-// the phone's own time zone. These helpers convert between the two (plain Kotlin, unit tested).
+// the phone's own time zone. These helpers convert between the two (plain Kotlin).
 
 private val UTC: TimeZone = TimeZone.getTimeZone("UTC")
 
