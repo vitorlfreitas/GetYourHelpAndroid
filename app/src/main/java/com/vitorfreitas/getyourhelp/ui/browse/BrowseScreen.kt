@@ -50,6 +50,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.vitorfreitas.getyourhelp.data.AppUser
 import com.vitorfreitas.getyourhelp.data.Coordinates
@@ -133,11 +134,11 @@ fun BrowseScreen(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SortChip(sort) { option ->
+                DropdownChip(sort, TaskSort.entries, { it.label }, Icons.AutoMirrored.Filled.Sort, sort != TaskSort.NEWEST) { option ->
                     sort = option
                     if (option == TaskSort.NEAREST) needLocation()
                 }
-                DistanceChip(maxDistanceKm) { option ->
+                DropdownChip(maxDistanceKm, listOf(null) + DISTANCE_OPTIONS_KM, ::distanceLabel, Icons.Outlined.NearMe, maxDistanceKm != null) { option ->
                     maxDistanceKm = option
                     if (option != null) needLocation()
                 }
@@ -199,48 +200,31 @@ fun BrowseScreen(
     }
 }
 
-/** "Newest first" / "Nearest first", as a chip that opens a menu. */
+/** A chip showing the [selected] option; tapping it opens a menu with all [options] (sort, distance). */
 @Composable
-private fun SortChip(sort: TaskSort, onSelect: (TaskSort) -> Unit) {
+private fun <T> DropdownChip(
+    selected: T,
+    options: List<T>,
+    label: (T) -> String,
+    icon: ImageVector,
+    highlighted: Boolean,
+    onSelect: (T) -> Unit
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         FilterChip(
-            selected = sort != TaskSort.NEWEST,
+            selected = highlighted,
             onClick = { expanded = true },
-            label = { Text(sort.label) },
-            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            label = { Text(label(selected)) },
+            leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp)) }
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            TaskSort.entries.forEach { option ->
+            options.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option.label) },
+                    text = { Text(label(option)) },
                     onClick = { expanded = false; onSelect(option) },
-                    trailingIcon = if (option == sort) { { Icon(Icons.Filled.Check, contentDescription = "Selected") } } else null
-                )
-            }
-        }
-    }
-}
-
-/** "Any distance" / "Within 5 km", as a chip that opens a menu. */
-@Composable
-private fun DistanceChip(maxDistanceKm: Int?, onSelect: (Int?) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        FilterChip(
-            selected = maxDistanceKm != null,
-            onClick = { expanded = true },
-            label = { Text(distanceLabel(maxDistanceKm)) },
-            leadingIcon = { Icon(Icons.Outlined.NearMe, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp)) }
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            (listOf<Int?>(null) + DISTANCE_OPTIONS_KM).forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(distanceLabel(option)) },
-                    onClick = { expanded = false; onSelect(option) },
-                    trailingIcon = if (option == maxDistanceKm) { { Icon(Icons.Filled.Check, contentDescription = "Selected") } } else null
+                    trailingIcon = if (option == selected) { { Icon(Icons.Filled.Check, contentDescription = "Selected") } } else null
                 )
             }
         }

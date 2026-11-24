@@ -112,14 +112,9 @@ class TaskDetailActions(
 )
 
 /**
- * Full-page task details. What the page offers depends on who is looking and on the task status:
- * - owner, OPEN: edit or cancel the task, and the live list of applications with Accept and Decline
- * - helper, OPEN: apply (payment method + optional message), or withdraw a pending application
- * - accepted helper, ONGOING: "Mark work as done"; then the owner confirms (or says it isn't finished)
- * - owner and accepted helper, ONGOING or COMPLETED: the chat (read-only once completed)
- * - owner or accepted helper, COMPLETED: "Leave a review"
- * - anyone except the owner: "Report this task", once
- * The location has an "Open in Maps" button and, if the user's position is known, the distance.
+ * Task details. What the page offers depends on who is looking and on the status: the owner edits,
+ * cancels, accepts helpers and confirms the work; a helper applies, withdraws and marks the work as
+ * done; both can chat once a helper is accepted, and review each other after completion.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,10 +157,7 @@ private fun TaskDetailContent(
     val isHelper = task.assignedHelperId == user.uid
     var showReport by rememberSaveable { mutableStateOf(false) }
     var showReview by rememberSaveable { mutableStateOf(false) }
-    var confirmComplete by rememberSaveable { mutableStateOf(false) }
-    var confirmNotFinished by rememberSaveable { mutableStateOf(false) }
-    var confirmWorkDone by rememberSaveable { mutableStateOf(false) }
-    var confirmCancel by rememberSaveable { mutableStateOf(false) }
+    var confirm by rememberSaveable { mutableStateOf<Confirm?>(null) }
     var applicationToAccept by remember { mutableStateOf<TaskApplication?>(null) }
 
     Column(
@@ -234,9 +226,9 @@ private fun TaskDetailContent(
                 onAccept = { applicationToAccept = it },
                 onDecline = actions.onDecline,
                 onEdit = actions.onEdit,
-                onCancel = { confirmCancel = true },
-                onConfirmCompleted = { confirmComplete = true },
-                onNotFinished = { confirmNotFinished = true },
+                onCancel = { confirm = Confirm.CANCEL_TASK },
+                onConfirmCompleted = { confirm = Confirm.COMPLETE },
+                onNotFinished = { confirm = Confirm.NOT_FINISHED },
                 onOpenChat = actions.onOpenChat
             )
         } else {
@@ -247,7 +239,7 @@ private fun TaskDetailContent(
                 busy = state.busy,
                 onApply = actions.onApply,
                 onWithdraw = actions.onWithdraw,
-                onMarkWorkDone = { confirmWorkDone = true },
+                onMarkWorkDone = { confirm = Confirm.WORK_DONE },
                 onOpenChat = actions.onOpenChat
             )
         }
@@ -290,51 +282,12 @@ private fun TaskDetailContent(
 
     applicationToAccept?.let { application ->
         ConfirmDialog(
-            title = "Accept ${application.helperName}?",
-            message = "They become the helper for this task, and the other pending applications are declined. You can then chat with them.",
-            confirmLabel = "Accept",
-            onConfirm = { actions.onAccept(application) },
-            onDismiss = { applicationToAccept = null }
+            "Accept ${application.helperName}?",
+            "They become the helper for this task, and the other pending applications are declined. You can then chat with them.",
+            "Accept", onConfirm = { actions.onAccept(application) }, onDismiss = { applicationToAccept = null }
         )
     }
-    if (confirmCancel) {
-        ConfirmDialog(
-            title = "Cancel this task?",
-            message = "It disappears from Browse and nobody can apply any more. People who applied will see that it was cancelled. This can't be undone.",
-            confirmLabel = "Cancel task",
-            dismissLabel = "Keep it",
-            destructive = true,
-            onConfirm = actions.onCancelTask,
-            onDismiss = { confirmCancel = false }
-        )
-    }
-    if (confirmWorkDone) {
-        ConfirmDialog(
-            title = "Is the work finished?",
-            message = "${task.ownerName.substringBefore(' ')} will be asked to confirm it. Then you can review each other.",
-            confirmLabel = "Mark as done",
-            onConfirm = actions.onMarkWorkDone,
-            onDismiss = { confirmWorkDone = false }
-        )
-    }
-    if (confirmComplete) {
-        ConfirmDialog(
-            title = "Confirm the task is done?",
-            message = "The task moves to Completed, the chat becomes read-only, and you can review each other.",
-            confirmLabel = "Confirm",
-            onConfirm = actions.onConfirmCompleted,
-            onDismiss = { confirmComplete = false }
-        )
-    }
-    if (confirmNotFinished) {
-        ConfirmDialog(
-            title = "Not finished yet?",
-            message = "The task stays ongoing and ${task.assignedHelperName.substringBefore(' ')} can mark it as done again. Use the chat to explain what is missing.",
-            confirmLabel = "Not finished",
-            onConfirm = actions.onWorkNotFinished,
-            onDismiss = { confirmNotFinished = false }
-        )
-    }
+    confirm?.let { ConfirmationDialog(it, task, actions, onDismiss = { confirm = null }) }
     if (showReport) {
         ReportTaskDialog(
             onSubmit = { reason, details -> actions.onReport(reason, details); showReport = false },
@@ -345,6 +298,35 @@ private fun TaskDetailContent(
         ReviewDialog(
             onSubmit = { rating, comment -> actions.onReview(rating, comment); showReview = false },
             onDismiss = { showReview = false }
+        )
+    }
+}
+
+/** The actions that ask "Are you sure?" first. An enum, so an open dialog survives rotation. */
+private enum class Confirm { CANCEL_TASK, WORK_DONE, COMPLETE, NOT_FINISHED }
+
+@Composable
+private fun ConfirmationDialog(confirm: Confirm, task: TaskItem, actions: TaskDetailActions, onDismiss: () -> Unit) {
+    when (confirm) {
+        Confirm.CANCEL_TASK -> ConfirmDialog(
+            "Cancel this task?",
+            "It disappears from Browse and nobody can apply any more. People who applied will see that it was cancelled. This can't be undone.",
+            "Cancel task", actions.onCancelTask, onDismiss, dismissLabel = "Keep it", destructive = true
+        )
+        Confirm.WORK_DONE -> ConfirmDialog(
+            "Is the work finished?",
+            "${task.ownerName.substringBefore(' ')} will be asked to confirm it. Then you can review each other.",
+            "Mark as done", actions.onMarkWorkDone, onDismiss
+        )
+        Confirm.COMPLETE -> ConfirmDialog(
+            "Confirm the task is done?",
+            "The task moves to Completed, the chat becomes read-only, and you can review each other.",
+            "Confirm", actions.onConfirmCompleted, onDismiss
+        )
+        Confirm.NOT_FINISHED -> ConfirmDialog(
+            "Not finished yet?",
+            "The task stays ongoing and ${task.assignedHelperName.substringBefore(' ')} can mark it as done again. Use the chat to explain what is missing.",
+            "Not finished", actions.onWorkNotFinished, onDismiss
         )
     }
 }
