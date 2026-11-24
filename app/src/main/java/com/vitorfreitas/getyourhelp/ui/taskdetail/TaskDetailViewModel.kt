@@ -1,6 +1,5 @@
 package com.vitorfreitas.getyourhelp.ui.taskdetail
 
-import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.createSavedStateHandle
@@ -28,12 +27,8 @@ import kotlin.coroutines.cancellation.CancellationException
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * Everything the task details page shows.
- * - task: the latest version of the task (null while loading, or if it no longer exists)
- * - applications: everyone who applied (only loaded for the task owner)
- * - myApplication: the signed-in helper's own application for this task, if any
- * - hasReported: this user already reported the task (each user can report a task once)
- * - busy: an action is running, so its buttons are disabled
+ * What the task details page shows. applications are only loaded for the task owner, and
+ * myApplication is the signed-in helper's own application for this task.
  */
 data class TaskDetailState(
     val task: TaskItem? = null,
@@ -44,18 +39,14 @@ data class TaskDetailState(
     val busy: Boolean = false
 )
 
-/**
- * ViewModel of one task details page. All its data is live: when the other person accepts, declines,
- * applies or marks the work as done on their phone, this page updates by itself. The task id comes
- * from the navigation route.
- */
+/** One task's page. All data is live: changes made on the other person's phone appear by themselves. */
 class TaskDetailViewModel(
     private val repository: MarketplaceRepository,
     private val messenger: UserMessenger,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-    private val taskId: String = savedStateHandle.toRoute<TaskDetailRoute>().taskId
-    private val userId: String = repository.currentUserId().orEmpty()
+    private val taskId = savedStateHandle.toRoute<TaskDetailRoute>().taskId
+    private val userId = repository.currentUserId().orEmpty()
     private val _state = MutableStateFlow(TaskDetailState())
     val state = _state.asStateFlow()
     private var applicationsJob: Job? = null
@@ -69,113 +60,81 @@ class TaskDetailViewModel(
                 }
                 .collect { task ->
                     _state.update { it.copy(task = task, loading = false) }
-                    if (task != null && task.ownerId == userId) listenToApplications()
+                    if (task?.ownerId == userId) listenToApplications()
                 }
         }
-        if (userId.isNotEmpty()) {
-            viewModelScope.launch {
-                repository.observeMyApplications(userId)
-                    .catch { e -> messenger.showError("Could not load your application. ${errorMessage(e)}") }
-                    .collect { applications ->
-                        // The list is newest first, so this is the latest application for this task
-                        _state.update { it.copy(myApplication = applications.firstOrNull { app -> app.taskId == taskId }) }
-                    }
+        viewModelScope.launch {
+            repository.observeMyApplications(userId)
+                .catch { e -> messenger.showError("Could not load your application. ${errorMessage(e)}") }
+                // The list is newest first, so this is the latest application for this task
+                .collect { list -> _state.update { it.copy(myApplication = list.firstOrNull { app -> app.taskId == taskId }) } }
+        }
+        viewModelScope.launch {
+            // Not critical: if this fails, the button stays and the server still refuses a second report
+            val reported = try {
+                repository.hasReported(taskId, userId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                false
             }
-            viewModelScope.launch {
-                try {
-                    val reported = repository.hasReported(taskId, userId)
-                    _state.update { it.copy(hasReported = reported) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Not critical: the report button stays visible, and the server still refuses a second report.
-                    Log.w("TaskDetail", "Could not check for an earlier report", e)
-                }
-            }
+            _state.update { it.copy(hasReported = reported) }
         }
     }
 
-    /** Only the owner may read everyone's applications, so this starts once we know the user owns the task. */
+    /** Only the owner may read everyone's applications. */
     private fun listenToApplications() {
         if (applicationsJob != null) return
         applicationsJob = viewModelScope.launch {
             repository.observeApplicationsForTask(taskId)
                 .catch { e -> messenger.showError("Could not load the applications. ${errorMessage(e)}") }
-                .collect { applications -> _state.update { it.copy(applications = applications) } }
+                .collect { list -> _state.update { it.copy(applications = list) } }
         }
     }
 
-    // ---------------------------------------------------------------- Helper actions
+    // Helper actions
 
     fun applyForTask(helper: AppUser, method: PaymentMethod?, message: String) =
-        runAction("Application sent. You'll see the answer here and in My Tasks.") {
-            repository.applyToTask(requireTask(), helper, method, message)
-        }
+        runAction("Application sent. You'll see the answer here and in My Tasks.") { repository.applyToTask(it, helper, method, message) }
 
     fun withdraw() = runAction("Application withdrawn.") {
-        repository.withdrawApplication(state.value.myApplication ?: error("You have not applied for this task."))
+        repository.withdrawApplication(state.value.myApplication ?: return@runAction)
     }
 
-    /** The accepted helper has finished the work. The requester is then asked to confirm it. */
-    fun markWorkDone() {
-        val task = state.value.task ?: return
-        runAction("Marked as done. ${task.ownerName.substringBefore(' ')} will confirm it.") {
-            repository.markWorkDone(requireTask())
-        }
-    }
+    fun markWorkDone() = runAction("Marked as done. The requester will confirm it.") { repository.markWorkDone(it) }
 
-    // ---------------------------------------------------------------- Owner actions
+    // Owner actions
 
-    fun accept(application: TaskApplication) = runAction("${application.helperName} is now helping with this task.") {
-        repository.acceptApplication(requireTask(), application)
-    }
+    fun accept(application: TaskApplication) =
+        runAction("${application.helperName} is now helping with this task.") { repository.acceptApplication(it, application) }
 
-    fun decline(application: TaskApplication) = runAction("Application declined.") {
-        repository.declineApplication(application)
-    }
+    fun decline(application: TaskApplication) = runAction("Application declined.") { repository.declineApplication(application) }
 
-    fun cancelTask() = runAction("Task cancelled. It no longer appears in Browse.") {
-        repository.cancelTask(requireTask())
-    }
+    fun cancelTask() = runAction("Task cancelled. It no longer appears in Browse.") { repository.cancelTask(it) }
 
-    /** The requester confirms the work the helper marked as done. */
-    fun confirmCompleted() = runAction("Task completed. You can now review each other.") {
-        repository.completeTask(requireTask())
-    }
+    fun confirmCompleted() = runAction("Task completed. You can now review each other.") { repository.completeTask(it) }
 
-    /** The requester says the work isn't finished, so the task goes back to the helper. */
-    fun markWorkNotFinished() = runAction("The helper can now finish the work and mark it as done again.") {
-        repository.markWorkNotFinished(requireTask())
-    }
+    fun markWorkNotFinished() =
+        runAction("The helper can now finish the work and mark it as done again.") { repository.markWorkNotFinished(it) }
 
-    // ---------------------------------------------------------------- Both
+    // Both
 
     fun report(user: AppUser, reason: String, details: String) = runAction("Report sent. Thank you, we'll review it.") {
-        repository.reportTask(requireTask(), user, reason, details)
-        _state.update { it.copy(hasReported = true) }
+        repository.reportTask(it, user, reason, details)
+        _state.update { state -> state.copy(hasReported = true) }
     }
 
-    fun review(user: AppUser, rating: Int, comment: String) = runAction("Review submitted. Thank you!") {
-        repository.submitReview(requireTask(), user, rating, comment)
-    }
+    fun review(user: AppUser, rating: Int, comment: String) =
+        runAction("Review submitted. Thank you!") { repository.submitReview(it, user, rating, comment) }
 
-    private fun requireTask(): TaskItem = state.value.task ?: error("This task is no longer available.")
-
-    /** Runs an action, disabling buttons meanwhile, then shows [successMessage] or the error. */
-    private fun runAction(successMessage: String, action: suspend () -> Unit) {
+    /** Runs an action on the current task with the buttons disabled, then shows [successMessage] or the error. */
+    private fun runAction(successMessage: String, action: suspend (TaskItem) -> Unit) {
+        val task = state.value.task ?: return
         if (state.value.busy) return
         viewModelScope.launch {
             _state.update { it.copy(busy = true) }
-            try {
-                action()
-                messenger.show(successMessage)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                messenger.showError(errorMessage(e))
-            } finally {
-                _state.update { it.copy(busy = false) }
-            }
+            messenger.attempt(successMessage) { action(task) }
+            _state.update { it.copy(busy = false) }
         }
     }
 

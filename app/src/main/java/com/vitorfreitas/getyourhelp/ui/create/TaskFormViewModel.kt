@@ -14,7 +14,6 @@ import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.TaskItem
 import com.vitorfreitas.getyourhelp.data.TaskStatus
 import com.vitorfreitas.getyourhelp.data.TaskType
-import com.vitorfreitas.getyourhelp.data.errorMessage
 import com.vitorfreitas.getyourhelp.location.LocationService
 import com.vitorfreitas.getyourhelp.location.approximate
 import com.vitorfreitas.getyourhelp.ui.UserMessenger
@@ -25,22 +24,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlin.coroutines.cancellation.CancellationException
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
-/** A place name found with GPS, to put in the location field. [id] changes every time, so the screen fills it only once. */
+/** A place found with GPS for the location field. [id] changes every time, so the screen fills it in only once. */
 data class LocationFill(val id: Long, val label: String)
 
 /**
- * - initial: the values the form starts with (empty for a new task, the task's values when editing;
- *   null while the task to edit is loading)
- * - paymentLocked: when editing, someone has a pending application, so the payment can't change
- * - busy: the task is being saved
- * - locating: "Use my current location" is reading the GPS
- * - locationFill: a place name found with GPS, for the location field
- * - savedTaskId: set once the task is saved, so the screen can close
- * - loadFailed: the task to edit could not be opened, so the screen closes
+ * initial is null while the task to edit is loading. paymentLocked: someone has applied, so the
+ * payment can't change. savedTaskId and loadFailed tell the screen to close.
  */
 data class TaskFormState(
     val initial: TaskInput? = null,
@@ -52,157 +44,110 @@ data class TaskFormState(
     val loadFailed: Boolean = false
 )
 
-/** A place name with its approximate position (null if unknown). */
+/** A place name with its approximate position. */
 private data class Place(val label: String, val coordinates: Coordinates?)
 
 /**
- * ViewModel of the task form, used both to post a new task ([editTaskId] = null) and to edit an
- * open one. The form fields themselves live in the screen (they survive rotation there).
- *
- * Every task gets an approximate position when possible, for distances and the map:
- * from "Use my current location", or by looking up the typed place name (geocoding).
+ * Posts a new task ([editTaskId] = null) or edits an open one. The form fields live in the screen.
+ * Each task gets an approximate position when possible: from GPS, or by looking up the typed place.
  */
 class TaskFormViewModel(
     private val repository: MarketplaceRepository,
     private val location: LocationService,
     private val messenger: UserMessenger,
-    private val editTaskId: String?
+    editTaskId: String?
 ) : ViewModel() {
-    private val _state = MutableStateFlow(if (editTaskId == null) TaskFormState(initial = TaskInput.Empty) else TaskFormState())
+    private val _state = MutableStateFlow(TaskFormState(initial = if (editTaskId == null) TaskInput.Empty else null))
     val state = _state.asStateFlow()
-
-    /** The task being edited (null when posting a new one). */
-    private var original: TaskItem? = null
-
-    /** A place name the app already has a position for: the task's saved location, or the one found with GPS. */
-    private var knownPlace: Place? = null
+    private var original: TaskItem? = null // the task being edited
+    private var knownPlace: Place? = null // a place name with a known position (saved, or found with GPS)
     private var fillCount = 0L
 
     init {
-        if (editTaskId != null) loadTaskToEdit(editTaskId)
-    }
-
-    private fun loadTaskToEdit(taskId: String) {
-        viewModelScope.launch {
-            try {
-                val task = repository.getTask(taskId) ?: error("This task no longer exists.")
-                require(task.ownerId == repository.currentUserId()) { "Only the requester can edit this task." }
-                require(task.status == TaskStatus.OPEN) { "Only open tasks can be edited." }
+        if (editTaskId != null) viewModelScope.launch {
+            val loaded = messenger.attempt(errorPrefix = "Could not open the task for editing. ") {
+                val task = repository.getTask(editTaskId)?.takeIf { it.status == TaskStatus.OPEN }
+                    ?: error("Only open tasks can be edited.")
                 original = task
                 knownPlace = Place(task.location, task.coordinates)
-                val paymentLocked = repository.hasPendingApplications(taskId)
+                val paymentLocked = repository.hasPendingApplications(task.id)
                 _state.update { it.copy(initial = TaskInput.from(task), paymentLocked = paymentLocked) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                messenger.showError("Could not open the task for editing. ${errorMessage(e)}")
-                _state.update { it.copy(loadFailed = true) }
             }
+            if (!loaded) _state.update { it.copy(loadFailed = true) }
         }
     }
 
-    /**
-     * Reads the GPS and fills the location field with the name of the area ("Ranelagh, Dublin").
-     * Only an approximate position (about 100 m) is kept for the task, never the exact one.
-     */
+    /** Fills the location field with the area's name ("Ranelagh, Dublin"). Only an approximate position is kept. */
     fun useCurrentLocation() {
         if (state.value.locating) return
         viewModelScope.launch {
             _state.update { it.copy(locating = true) }
-            try {
-                val here = location.currentLocation()
-                if (here == null) {
-                    messenger.showError("Couldn't find your location. Check that location is turned on, then try again.")
-                    return@launch
+            val here = location.currentLocation()
+            val area = here?.let { location.areaName(it) }
+            when {
+                here == null -> messenger.showError("Couldn't find your location. Check that location is turned on, then try again.")
+                area == null -> messenger.showError("Found your location, but not the name of the area. Please type it in.")
+                else -> {
+                    knownPlace = Place(area, here.approximate())
+                    _state.update { it.copy(locationFill = LocationFill(++fillCount, area)) }
                 }
-                val area = location.areaName(here)
-                if (area == null) {
-                    messenger.showError("Found your location, but not the name of the area. Please type it in.")
-                    return@launch
-                }
-                knownPlace = Place(area, here.approximate())
-                _state.update { it.copy(locationFill = LocationFill(++fillCount, area)) }
-            } finally {
-                _state.update { it.copy(locating = false) }
             }
+            _state.update { it.copy(locating = false) }
         }
     }
 
-    /** Validates the form once more (the button is not the only safeguard), then publishes or saves the task. */
+    /** Checks the form again (the button is not the only safeguard), then publishes or saves the task. */
     fun submit(owner: AppUser, input: TaskInput) {
         val validation = TaskValidator.validate(input)
         if (!validation.isValid || state.value.busy) return
-        original?.let { task ->
-            // Saving without changes would only mark the task as "edited", so just close the form
-            if (TaskValidator.sameTask(TaskInput.from(task), input)) {
-                messenger.show("No changes to save.")
-                _state.update { it.copy(savedTaskId = task.id) }
-                return
-            }
+        val editing = original
+        // Saving without changes would only mark the task as "edited"
+        if (editing != null && TaskValidator.sameTask(TaskInput.from(editing), input)) {
+            messenger.show("No changes to save.")
+            _state.update { it.copy(savedTaskId = editing.id) }
+            return
         }
         viewModelScope.launch {
             _state.update { it.copy(busy = true) }
-            val editing = original
-            try {
-                val paid = input.type == TaskType.PAID
-                val base = editing ?: TaskItem(
-                    id = "", ownerId = owner.uid, ownerName = owner.displayName, title = "", description = "",
-                    category = input.category, taskType = input.type, amount = 0.0,
-                    acceptedPaymentMethods = emptyList(), location = ""
-                )
-                val task = base.copy(
-                    title = input.title.trim(), description = input.description.trim(), category = input.category,
-                    taskType = input.type, amount = if (paid) validation.parsedAmount else 0.0,
-                    acceptedPaymentMethods = if (paid) PaymentMethod.entries.filter { it in input.paymentMethods } else emptyList(),
-                    location = input.location.trim(), coordinates = coordinatesFor(input.location),
-                    scheduledAt = input.scheduledAt
-                )
-                val taskId = if (editing == null) {
-                    repository.createTask(task).also { messenger.show("Task published. Helpers can now apply.") }
-                } else {
-                    repository.updateTask(editing, task)
-                    messenger.show("Changes saved.")
-                    editing.id
-                }
+            messenger.attempt(
+                success = if (editing == null) "Task published. Helpers can now apply." else "Changes saved.",
+                errorPrefix = if (editing == null) "Could not publish the task. " else "Could not save the changes. "
+            ) {
+                val task = taskFrom(input, validation.parsedAmount, owner)
+                val taskId = if (editing == null) repository.createTask(task) else editing.id.also { repository.updateTask(editing, task) }
                 _state.update { it.copy(savedTaskId = taskId) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                val action = if (editing == null) "publish the task" else "save the changes"
-                messenger.showError("Could not $action. ${errorMessage(e)}")
-            } finally {
-                _state.update { it.copy(busy = false) }
             }
+            _state.update { it.copy(busy = false) }
         }
     }
 
-    /**
-     * The approximate position of the typed location: the known one if the text was not changed,
-     * otherwise a geocoder lookup of the text. Null if it cannot be found; the task is still
-     * saved, just without a distance.
-     */
+    /** The task described by the form. Volunteer tasks have no amount or payment methods. */
+    private suspend fun taskFrom(input: TaskInput, amount: Double, owner: AppUser): TaskItem {
+        val paid = input.type == TaskType.PAID
+        return TaskItem(
+            id = "", ownerId = owner.uid, ownerName = owner.displayName, title = input.title.trim(),
+            description = input.description.trim(), category = input.category, taskType = input.type,
+            amount = if (paid) amount else 0.0,
+            acceptedPaymentMethods = if (paid) PaymentMethod.entries.filter { it in input.paymentMethods } else emptyList(),
+            location = input.location.trim(), coordinates = coordinatesFor(input.location), scheduledAt = input.scheduledAt
+        )
+    }
+
+    /** The known position if the place was not changed, otherwise a lookup of the typed text (null if not found). */
     private suspend fun coordinatesFor(place: String): Coordinates? {
         val text = place.trim()
-        knownPlace?.takeIf { it.label.equals(text, ignoreCase = true) && it.coordinates != null }
-            ?.let { return it.coordinates }
+        knownPlace?.takeIf { it.label.equals(text, ignoreCase = true) && it.coordinates != null }?.let { return it.coordinates }
         return location.coordinatesOf(text)?.approximate()
     }
 
     companion object {
-        /** For "Post a task". */
         val CreateFactory = viewModelFactory {
-            initializer {
-                val container = appContainer()
-                TaskFormViewModel(container.repository, container.location, container.messenger, editTaskId = null)
-            }
+            initializer { appContainer().let { TaskFormViewModel(it.repository, it.location, it.messenger, editTaskId = null) } }
         }
-
-        /** For "Edit task": the task id comes from the navigation route. */
         val EditFactory = viewModelFactory {
             initializer {
-                val container = appContainer()
                 val taskId = createSavedStateHandle().toRoute<EditTaskRoute>().taskId
-                TaskFormViewModel(container.repository, container.location, container.messenger, editTaskId = taskId)
+                appContainer().let { TaskFormViewModel(it.repository, it.location, it.messenger, taskId) }
             }
         }
     }

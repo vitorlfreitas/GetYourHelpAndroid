@@ -23,14 +23,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlin.coroutines.cancellation.CancellationException
 
 // GitHub URL: https://github.com/vitorlfreitas/GetYourHelpAndroid
 
 /**
- * - task: the live task (for the other person's name, and to close the chat when the task is completed)
- * - messages / messagesLoaded: the live messages, oldest first
- * - unsentText: a message that failed to send, put back in the text field so it is not lost
+ * The live task (for the names, and to close the chat once it is completed) and its messages,
+ * oldest first. unsentText is a message that failed to send, put back in the text field.
  */
 data class ChatState(
     val task: TaskItem? = null,
@@ -40,14 +38,13 @@ data class ChatState(
     val unsentText: String? = null
 )
 
-/** ViewModel of a task's chat. The task id comes from the navigation route. */
 class ChatViewModel(
     private val repository: MarketplaceRepository,
     private val messenger: UserMessenger,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-    private val taskId: String = savedStateHandle.toRoute<ChatRoute>().taskId
-    private val userId: String = repository.currentUserId().orEmpty()
+    private val taskId = savedStateHandle.toRoute<ChatRoute>().taskId
+    private val userId = repository.currentUserId().orEmpty()
     private val _state = MutableStateFlow(ChatState())
     val state = _state.asStateFlow()
     private var messagesJob: Job? = null
@@ -61,8 +58,8 @@ class ChatViewModel(
                 }
                 .collect { task ->
                     _state.update { it.copy(task = task, loading = false) }
-                    // The security rules only let the requester and the accepted helper read the messages
-                    if (task != null && task.hasChatFor(userId)) listenToMessages()
+                    // Only the requester and the accepted helper may read the messages
+                    if (task?.hasChatFor(userId) == true) listenToMessages()
                 }
         }
     }
@@ -79,34 +76,21 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * Sends a message. It shows up in the list straight away (as "Sending…") while Firestore
-     * delivers it. If it fails, the text goes back into the text field.
-     */
+    /** The message appears at once as "Sending…". If it fails, the text goes back into the text field. */
     fun send(sender: AppUser, text: String) {
         val task = state.value.task ?: return
         if (ChatValidator.message(text) != null) return
         viewModelScope.launch {
-            try {
-                repository.sendMessage(task.id, sender, text)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _state.update { it.copy(unsentText = text) }
-                messenger.showError("Message not sent. ${errorMessage(e)}")
-            }
+            val sent = messenger.attempt(errorPrefix = "Message not sent. ") { repository.sendMessage(task.id, sender, text) }
+            if (!sent) _state.update { it.copy(unsentText = text) }
         }
     }
 
-    /** The screen has put the unsent text back in the text field. */
     fun unsentTextRestored() = _state.update { it.copy(unsentText = null) }
 
     companion object {
         val Factory = viewModelFactory {
-            initializer {
-                val container = appContainer()
-                ChatViewModel(container.repository, container.messenger, createSavedStateHandle())
-            }
+            initializer { appContainer().let { ChatViewModel(it.repository, it.messenger, createSavedStateHandle()) } }
         }
     }
 }
