@@ -173,7 +173,7 @@ fun AppNavHost(appVm: AppViewModel, navController: NavHostController, modifier: 
                     onEdit = { if (entry.isResumed()) navController.navigate(EditTaskRoute(taskId)) },
                     onCancelTask = detailVm::cancelTask,
                     onMarkWorkDone = detailVm::markWorkDone,
-                    onConfirmCompleted = { detailVm.confirmCompleted(user) },
+                    onConfirmCompleted = detailVm::confirmCompleted,
                     onWorkNotFinished = detailVm::markWorkNotFinished,
                     onOpenChat = { if (entry.isResumed()) navController.navigate(ChatRoute(taskId)) },
                     onOpenMaps = { task ->

@@ -88,7 +88,7 @@ class ChatViewModel(
         if (ChatValidator.message(text) != null) return
         viewModelScope.launch {
             try {
-                repository.sendMessage(task, sender, text)
+                repository.sendMessage(task.id, sender, text)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

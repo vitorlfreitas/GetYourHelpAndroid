@@ -10,8 +10,10 @@ import com.vitorfreitas.getyourhelp.appContainer
 import com.vitorfreitas.getyourhelp.data.AppUser
 import com.vitorfreitas.getyourhelp.data.Coordinates
 import com.vitorfreitas.getyourhelp.data.MarketplaceRepository
+import com.vitorfreitas.getyourhelp.data.PaymentMethod
 import com.vitorfreitas.getyourhelp.data.TaskItem
 import com.vitorfreitas.getyourhelp.data.TaskStatus
+import com.vitorfreitas.getyourhelp.data.TaskType
 import com.vitorfreitas.getyourhelp.data.errorMessage
 import com.vitorfreitas.getyourhelp.location.LocationService
 import com.vitorfreitas.getyourhelp.location.approximate
@@ -142,33 +144,23 @@ class TaskFormViewModel(
             _state.update { it.copy(busy = true) }
             val editing = original
             try {
-                val coordinates = coordinatesFor(input.location)
+                val paid = input.type == TaskType.PAID
+                val base = editing ?: TaskItem(
+                    id = "", ownerId = owner.uid, ownerName = owner.displayName, title = "", description = "",
+                    category = input.category, taskType = input.type, amount = 0.0,
+                    acceptedPaymentMethods = emptyList(), location = ""
+                )
+                val task = base.copy(
+                    title = input.title.trim(), description = input.description.trim(), category = input.category,
+                    taskType = input.type, amount = if (paid) validation.parsedAmount else 0.0,
+                    acceptedPaymentMethods = if (paid) PaymentMethod.entries.filter { it in input.paymentMethods } else emptyList(),
+                    location = input.location.trim(), coordinates = coordinatesFor(input.location),
+                    scheduledAt = input.scheduledAt
+                )
                 val taskId = if (editing == null) {
-                    repository.createTask(
-                        owner = owner,
-                        title = input.title,
-                        description = input.description,
-                        category = input.category,
-                        taskType = input.type,
-                        amount = validation.parsedAmount,
-                        paymentMethods = input.paymentMethods.toList(),
-                        location = input.location,
-                        coordinates = coordinates,
-                        scheduledAt = input.scheduledAt
-                    ).also { messenger.show("Task published. Helpers can now apply.") }
+                    repository.createTask(task).also { messenger.show("Task published. Helpers can now apply.") }
                 } else {
-                    repository.updateTask(
-                        task = editing,
-                        title = input.title,
-                        description = input.description,
-                        category = input.category,
-                        taskType = input.type,
-                        amount = validation.parsedAmount,
-                        paymentMethods = input.paymentMethods.toList(),
-                        location = input.location,
-                        coordinates = coordinates,
-                        scheduledAt = input.scheduledAt
-                    )
+                    repository.updateTask(editing, task)
                     messenger.show("Changes saved.")
                     editing.id
                 }

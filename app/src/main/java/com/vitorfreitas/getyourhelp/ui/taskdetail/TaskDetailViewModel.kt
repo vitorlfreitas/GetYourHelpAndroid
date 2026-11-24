@@ -131,7 +131,7 @@ class TaskDetailViewModel(
     }
 
     fun decline(application: TaskApplication) = runAction("Application declined.") {
-        repository.declineApplication(requireTask(), application)
+        repository.declineApplication(application)
     }
 
     fun cancelTask() = runAction("Task cancelled. It no longer appears in Browse.") {
@@ -139,8 +139,8 @@ class TaskDetailViewModel(
     }
 
     /** The requester confirms the work the helper marked as done. */
-    fun confirmCompleted(owner: AppUser) = runAction("Task completed. You can now review each other.") {
-        repository.completeTask(requireTask(), owner)
+    fun confirmCompleted() = runAction("Task completed. You can now review each other.") {
+        repository.completeTask(requireTask())
     }
 
     /** The requester says the work isn't finished, so the task goes back to the helper. */

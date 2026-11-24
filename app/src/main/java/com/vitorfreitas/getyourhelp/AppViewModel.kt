@@ -240,7 +240,7 @@ class AppViewModel(
     fun markPayment(payment: PaymentRecord) =
         runAction("Payment marked as paid. The app does not verify transfers.") {
             val user = state.value.user ?: error("Please sign in first.")
-            repository.markPaymentRecorded(payment.id, user)
+            repository.markPaymentRecorded(payment.id)
             _state.update { it.copy(payments = repository.paymentRecords(user.uid)) }
         }
 
